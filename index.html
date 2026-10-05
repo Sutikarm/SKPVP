@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Shop Billing</title>
+<style>
+:root{--ink:#1d2433;--mut:#667085;--bg:#f4f6f8;--card:#fff;--ac:#0f766e;--ln:#d9dee5;--bad:#b42318}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.4 system-ui,sans-serif;color:var(--ink);background:var(--bg);padding:env(safe-area-inset-top) 0 calc(70px + env(safe-area-inset-bottom))}
+main{max-width:640px;margin:0 auto;padding:10px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:12px;margin-bottom:10px}
+h2{font-size:16px;margin:0 0 8px}
+input,select{width:100%;padding:10px;margin:0 0 8px;border:1px solid var(--ln);border-radius:8px;font:inherit;background:#fff}
+label{display:block;font-size:12px;color:var(--mut);flex:1}
+.row{display:flex;gap:8px}
+button{font:inherit;padding:10px 14px;border-radius:8px;border:1px solid var(--ln);background:#fff;color:var(--ink)}
+button.pri{background:var(--ac);color:#fff;border-color:var(--ac);width:100%;margin-top:4px}
+button.lnk{border:0;background:none;color:var(--ac);padding:4px 8px}
+.it{border-top:1px solid var(--ln);padding:8px 0}.it:first-of-type{border-top:0}
+.mut{color:var(--mut)}.tot{font-size:18px;font-weight:700}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:#fff;border-top:1px solid var(--ln);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;border-radius:0;padding:14px 2px;background:none;font-size:13px}
+nav button.on{color:var(--ac);font-weight:700;box-shadow:inset 0 3px 0 var(--ac)}
+#warn{background:#fef3c7;color:#92400e;padding:8px 12px;font-size:13px}
+#vid{width:100%;max-height:40vh;object-fit:cover;background:#000;border-radius:10px;margin-bottom:10px}
+#lock{position:fixed;inset:0;background:var(--bg);display:none;place-items:center;z-index:9}
+#lock>div{width:260px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px;border-top:1px solid var(--ln);text-align:left}
+td.n,th.n{text-align:right}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;background:var(--ink);color:#fff;padding:8px 14px;border-radius:20px;display:none;z-index:8}
+</style></head><body>
+<div id="lock"><div class="card"><h2>Enter PIN</h2><input id="pin" type="password" inputmode="numeric"><button class="pri" onclick="unlock()">Open</button></div></div>
+<div id="warn" hidden>Backup is due. Open Settings and tap Backup.</div>
+<main><video id="vid" playsinline muted hidden></video><div id="main"></div></main>
+<div id="toast"></div>
+<nav>
+<button data-t="bill" onclick="go('bill')">Bill</button>
+<button data-t="stock" onclick="go('stock')">Stock</button>
+<button data-t="qr" onclick="go('qr')">QR labels</button>
+<button data-t="rep" onclick="go('rep')">Reports</button>
+<button data-t="set" onclick="go('set')">Settings</button>
+</nav>
+<!-- Libraries: for offline use, download these three files next to index.html and change the paths -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>
+const $=s=>document.querySelector(s),K='shopdb1',LIM=[10,10,10,10,15];
+const e=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+const L1=['Type of Cloth','Color of Cloth','Type of Design','Pattern','Description'];
+const L2=['Type of Cloth','Color of Cloth','Type of Design','Size','Description'];
+const L3=['Color of Cloth','Length','Width','Height','Description'];
+let db;try{db=JSON.parse(localStorage.getItem(K))}catch(x){}
+db=db||{cats:{'Dress Material':L1,'Sarries':L1,'Kurties':L2,'Trays':L3,'Boxes':L3,'Frames':L3,'Key Holders':L3,'Clocks':L3},items:[],sales:[],shop:{name:'My Shop',upi:''},pin:'',seq:0,lastBackup:0};
+const save=()=>localStorage.setItem(K,JSON.stringify(db));
+if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
+const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
+const money=n=>'Rs '+Number(n).toFixed(2);
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',1800)}
+let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
+const T={bill,stock,qr,rep,set};
+function go(t){tab=t;stopScan();render()}
+function render(){
+ document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+ $('#warn').hidden=!(db.sales.length&&Date.now()-db.lastBackup>864e5);
+ $('#main').innerHTML=T[tab]();
+ if(tab==='stock')lab();if(tab==='bill'&&!paid)drawCart();
+}
+/* ---------- STOCK ---------- */
+function stock(){
+ const cs=Object.keys(db.cats);
+ const list=db.items.slice().reverse().map(it=>`<div class=it><b>${e(it.id)}</b> ${e(desc(it))}<br><span class=mut>Qty ${it.qty} | Cost ${it.cost} | Price ${it.price}</span>
+ <button class=lnk onclick="chg('${it.id}','qty')">Add qty</button><button class=lnk onclick="chg('${it.id}','price')">Change price</button></div>`).join('')||'<p class=mut>No stock yet. Add your first item above.</p>';
+ return `<div class=card><h2>Add stock item</h2><select id=cat onchange="lastCat=this.value;lab()">${cs.map(c=>`<option ${c===lastCat?'selected':''}>${e(c)}</option>`).join('')}</select>
+ <div id=fl></div><div class=row><label>Cost price<input id=cost type=number inputmode=decimal></label><label>Selling price<input id=price type=number inputmode=decimal></label><label>Qty<input id=qty type=number inputmode=numeric value=1></label></div>
+ <button class=pri onclick="addItem()">Save item</button></div><div class=card><h2>Stock list</h2>${list}</div>`;
+}
+function lab(){
+ const c=$('#cat').value;lastCat=c;
+ $('#fl').innerHTML=db.cats[c].map((l,i)=>`<label>${e(l)} (max ${LIM[i]})<input class=fi maxlength=${LIM[i]}></label>`).join('');
+}
+function addItem(){
+ const c=$('#cat').value,f=[...document.querySelectorAll('.fi')].map(x=>x.value.trim());
+ const cost=parseFloat($('#cost').value),price=parseFloat($('#price').value),qty=parseInt($('#qty').value);
+ if(!f.some(x=>x))return alert('Fill the item description.');
+ if(!(cost>=0)||!(price>=0)||!(qty>0))return alert('Enter cost price, selling price and quantity.');
+ const id=c.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase()+'-'+today().slice(2).replace(/-/g,'')+'-'+String(++db.seq).padStart(3,'0');
+ db.items.push({id,cat:c,f,cost,price,qty,date:today()});save();toast('Saved '+id);render();
+}
+function chg(id,k){
+ const it=db.items.find(x=>x.id===id),v=parseFloat(prompt(k==='qty'?'Quantity to add':'New selling price'));
+ if(!(v>=0))return;if(k==='qty')it.qty+=Math.round(v);else it.price=v;save();render();
+}
+/* ---------- QR LABELS ---------- */
+function drawQR(d,t,x,y,s){
+ const q=qrcode(0,'M');q.addData(t);q.make();const n=q.getModuleCount(),m=s/n;d.setFillColor(0);
+ for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(q.isDark(r,c))d.rect(x+c*m,y+r*m,m+.02,m+.02,'F');
+}
+function qr(){
+ const n=db.items.filter(i=>i.qty>0).length;
+ return `<div class=card><h2>QR labels</h2><p>${n} items in stock. One QR per item, 36 labels per A4 sheet.</p><button class=pri onclick="qrPdf()">Create QR PDF</button></div>`;
+}
+async function qrPdf(){
+ const its=db.items.filter(i=>i.qty>0);if(!its.length)return alert('No stock available.');
+ const {jsPDF}=window.jspdf,d=new jsPDF({unit:'mm',format:'a4'});
+ its.forEach((it,k)=>{
+  if(k&&k%36===0)d.addPage();
+  const p=k%36,x=5+(p%4)*50,y=4.5+Math.floor(p/4)*32;
+  d.setDrawColor(200);d.rect(x,y,50,32);drawQR(d,it.id,x+14,y+1.5,22);
+  d.setFontSize(6.5);d.setFont('helvetica','bold');d.text(it.id,x+25,y+26,{align:'center'});
+  d.setFont('helvetica','normal');d.setFontSize(5.5);d.text(d.splitTextToSize(desc(it),46).slice(0,2),x+25,y+28.8,{align:'center'});
+ });
+ out(d.output('blob'),'QR-labels-'+today()+'.pdf');
+}
+function out(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>window.open(u),300)}
+/* ---------- BILLING ---------- */
+function bill(){
+ if(paid)return payView();
+ return `<div class=card><h2>Customer</h2><input placeholder="Customer name" value="${e(cust.n)}" oninput="cust.n=this.value">
+ <input placeholder="Mobile number" inputmode=tel value="${e(cust.m)}" oninput="cust.m=this.value">
+ <button id=scanBtn class=pri onclick="scan()">Scan item QR</button>
+ <div class=row style="margin-top:8px"><input id=man placeholder="Or type item code"><button onclick="addCode($('#man').value.trim());$('#man').value=''">Add</button></div></div><div id=cartbox></div>`;
+}
+function drawCart(){
+ const rows=cart.map((c,i)=>{const it=db.items.find(x=>x.id===c.id);
+  return `<div class=it><b>${e(desc(it))}</b> <span class=mut>${e(it.id)}</span><div class=row>
+  <label>Qty (stock ${it.qty})<input type=number inputmode=numeric min=1 value=${c.qty} onchange="cq(${i},this.value)"></label>
+  <label>Rate<input value=${it.price} disabled></label><label>Discount<input type=number inputmode=decimal min=0 value=${c.disc} onchange="cd(${i},this.value)"></label></div>
+  <div>${money(c.qty*it.price-c.disc)} <button class=lnk onclick="rm(${i})">Remove</button></div></div>`}).join('')||'<p class=mut>Scan a QR to add items to the cart.</p>';
+ $('#cartbox').innerHTML=`<div class=card><h2>Cart</h2>${rows}${cart.length?`<div class=tot>Total ${money(total())}</div><button class=pri onclick="conf()">Confirm bill</button>`:''}</div>`;
+}
+const item=id=>db.items.find(x=>x.id===id);
+const total=()=>cart.reduce((s,c)=>s+c.qty*item(c.id).price-c.disc,0);
+function cq(i,v){cart[i].qty=Math.max(1,parseInt(v)||1);drawCart()}
+function cd(i,v){cart[i].disc=Math.max(0,parseFloat(v)||0);drawCart()}
+function rm(i){cart.splice(i,1);drawCart()}
+function addCode(code){
+ if(!code)return;const it=item(code);
+ if(!it)return toast('Unknown code: '+code);
+ if(it.qty<1)return toast('Out of stock');
+ const c=cart.find(x=>x.id===code);
+ if(c){if(c.qty<it.qty)c.qty++;else return toast('No more stock')}else cart.push({id:code,qty:1,disc:0});
+ navigator.vibrate&&navigator.vibrate(60);toast('Added: '+desc(it));drawCart();
+}
+let stream=null,scanOn=false,last='',lastT=0;
+async function scan(){
+ if(scanOn)return stopScan();
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})}
+ catch(x){return alert('Camera is not available. Open the app from its https address and allow camera access.')}
+ const v=$('#vid');v.srcObject=stream;v.hidden=false;await v.play();scanOn=true;$('#scanBtn').textContent='Stop scan';
+ const c=document.createElement('canvas'),g=c.getContext('2d',{willReadFrequently:true});
+ (function loop(){
+  if(!scanOn)return;
+  if(v.videoWidth){const w=Math.min(640,v.videoWidth);c.width=w;c.height=w*v.videoHeight/v.videoWidth;g.drawImage(v,0,0,c.width,c.height);
+   const r=jsQR(g.getImageData(0,0,c.width,c.height).data,c.width,c.height);
+   if(r&&r.data&&(r.data!==last||Date.now()-lastT>2500)){last=r.data;lastT=Date.now();addCode(r.data)}}
+  setTimeout(loop,150);
+ })();
+}
+function stopScan(){scanOn=false;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$('#vid').hidden=true;const b=$('#scanBtn');if(b)b.textContent='Scan item QR'}
+function conf(){
+ const mob=cust.m.replace(/\D/g,'').slice(-10);
+ if(!cust.n.trim()||mob.length!==10)return alert('Enter customer name and a 10-digit mobile number.');
+ for(const c of cart){const it=item(c.id);if(c.qty>it.qty)return alert(`Only ${it.qty} in stock: ${desc(it)}`);if(c.disc>c.qty*it.price)return alert('Discount is more than the item amount.')}
+ stopScan();
+ const s={no:'B'+String(db.sales.length+1).padStart(4,'0'),date:today(),cust:cust.n.trim(),mob,mode:'',total:total(),
+  lines:cart.map(c=>{const it=item(c.id);return{id:it.id,desc:desc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
+ cart.forEach(c=>item(c.id).qty-=c.qty);db.sales.push(s);save();
+ lastPdf=mkBill(s);paid=s;cart=[];cust={n:'',m:''};render();
+}
+const upiLink=amt=>`upi://pay?pa=${encodeURIComponent(db.shop.upi)}&pn=${encodeURIComponent(db.shop.name)}&am=${amt.toFixed(2)}&cu=INR`;
+function mkBill(s){
+ const {jsPDF}=window.jspdf,d=new jsPDF({unit:'mm',format:[105,148]});let y=9;
+ d.setFont('helvetica','bold');d.setFontSize(13);d.text(db.shop.name,52.5,y,{align:'center'});
+ d.setFontSize(8);d.setFont('helvetica','normal');y+=6;d.text(`Bill ${s.no}    ${s.date}`,6,y);
+ y+=4.5;d.text(`${s.cust}   ${s.mob}`,6,y);y+=3;d.line(6,y,99,y);y+=4;
+ d.setFont('helvetica','bold');d.text('Item',6,y);d.text('Qty',64,y,{align:'right'});d.text('Rate',80,y,{align:'right'});d.text('Amount',99,y,{align:'right'});
+ d.setFont('helvetica','normal');y+=4;
+ s.lines.forEach(l=>{
+  const t=d.splitTextToSize(l.desc,52);if(y+t.length*3.5>124){d.addPage();y=10}
+  d.text(t,6,y);d.text(String(l.qty),64,y,{align:'right'});d.text(l.price.toFixed(2),80,y,{align:'right'});d.text((l.qty*l.price).toFixed(2),99,y,{align:'right'});
+  y+=t.length*3.5;if(l.disc){d.text('Discount',6,y);d.text('-'+l.disc.toFixed(2),99,y,{align:'right'});y+=3.5}y+=1;
+ });
+ d.line(6,y,99,y);y+=5;d.setFont('helvetica','bold');d.setFontSize(10);d.text('Total',6,y);d.text(money(s.total),99,y,{align:'right'});
+ if(db.shop.upi){y+=4;if(y+30>142){d.addPage();y=8}drawQR(d,upiLink(s.total),6,y,26);d.setFontSize(8);d.text('Scan to pay',36,y+12)}
+ d.setFont('helvetica','normal');d.setFontSize(7);d.text('Thank you! Please visit again.',52.5,145,{align:'center'});
+ return d.output('blob');
+}
+function payView(){
+ const s=paid;
+ const qrImg=s.mode==='QR Code'&&db.shop.upi?(()=>{const q=qrcode(0,'M');q.addData(upiLink(s.total));q.make();return `<p>Customer scans to pay ${money(s.total)}</p>${q.createImgTag(6)}`})():'';
+ return `<div class=card><h2>Bill ${s.no} saved</h2><div class=tot>${money(s.total)}</div>
+ ${s.mode?`<p>Payment mode: <b>${s.mode}</b></p>${qrImg}<button class=pri onclick="sendBill()">Send bill to customer</button><button class=pri onclick="out(lastPdf,'${s.no}.pdf')">Open bill PDF</button><button class=pri onclick="paid=null;render()">New bill</button>`
+ :`<p>Payment mode</p><div class=row><button class=pri onclick="pm('Cash')">Cash</button><button class=pri onclick="pm('QR Code')">QR Code</button></div>`}</div>`;
+}
+function pm(m){if(m==='QR Code'&&!db.shop.upi)alert('Add your UPI ID in Settings to show a payment QR. The mode is still saved.');paid.mode=m;save();render()}
+async function sendBill(){
+ const s=paid,f=new File([lastPdf],s.no+'.pdf',{type:'application/pdf'}),msg=`${db.shop.name}: Bill ${s.no}, total ${money(s.total)}. Thank you!`;
+ if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],text:msg})}catch(x){}return}
+ window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(msg));out(lastPdf,s.no+'.pdf');
+}
+/* ---------- REPORTS ---------- */
+let rf=today().slice(0,8)+'01',rt=today();
+function rep(){
+ const ss=db.sales.filter(s=>s.date>=rf&&s.date<=rt);let rev=0,cost=0;
+ ss.forEach(s=>s.lines.forEach(l=>{rev+=l.qty*l.price-l.disc;cost+=l.qty*l.cost}));
+ const st=db.items.filter(i=>i.qty>0);let sv=0,sc=0;st.forEach(i=>{sv+=i.qty*i.price;sc+=i.qty*i.cost});
+ return `<div class=card><h2>Profit and loss</h2><div class=row><label>From<input type=date value=${rf} onchange="rf=this.value;render()"></label><label>To<input type=date value=${rt} onchange="rt=this.value;render()"></label></div>
+ <table><tr><td>Bills</td><td class=n>${ss.length}</td></tr><tr><td>Sales (after discount)</td><td class=n>${money(rev)}</td></tr><tr><td>Cost of goods sold</td><td class=n>${money(cost)}</td></tr>
+ <tr><td><b>${rev-cost>=0?'Profit':'Loss'}</b></td><td class=n><b>${money(Math.abs(rev-cost))}</b></td></tr></table></div>
+ <div class=card><h2>Stock in hand</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Cost</th><th class=n>Price</th></tr>
+ ${st.map(i=>`<tr><td>${e(desc(i))}<br><span class=mut>${i.id}</span></td><td class=n>${i.qty}</td><td class=n>${i.cost}</td><td class=n>${i.price}</td></tr>`).join('')}
+ <tr><td><b>Stock value</b></td><td></td><td class=n><b>${money(sc)}</b></td><td class=n><b>${money(sv)}</b></td></tr></table></div>`;
+}
+/* ---------- SETTINGS ---------- */
+function set(){
+ return `<div class=card><h2>Shop</h2><label>Shop name<input value="${e(db.shop.name)}" onchange="db.shop.name=this.value;save()"></label>
+ <label>UPI ID for payment QR<input value="${e(db.shop.upi)}" placeholder="name@bank" onchange="db.shop.upi=this.value.trim();save()"></label>
+ <label>App PIN (leave empty for none)<input type=password inputmode=numeric value="${e(db.pin)}" onchange="db.pin=this.value;save()"></label></div>
+ <div class=card><h2>Backup</h2><p class=mut>Backup files contain customer names and numbers. Keep them in a private folder.</p>
+ <button class=pri onclick="backup()">Backup now</button><label style="margin-top:10px">Restore from backup file<input type=file accept=".json" onchange="restore(this.files[0])"></label></div>
+ <div class=card><h2>Categories</h2><p class=mut>${Object.keys(db.cats).map(e).join(', ')}</p><button class=pri onclick="addCat()">Add new category</button></div>`;
+}
+async function backup(){
+ const f=new File([JSON.stringify(db)],'shop-backup-'+today()+'.json',{type:'application/json'});
+ db.lastBackup=Date.now();save();
+ if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f]})}catch(x){}}
+ else{const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;a.click()}
+ render();
+}
+function restore(f){
+ if(!f)return;const r=new FileReader();
+ r.onload=()=>{try{const n=JSON.parse(r.result);if(!n.items||!n.cats)throw 0;if(!confirm('Replace all current data with this backup?'))return;db=n;save();toast('Restored');render()}catch(x){alert('This is not a valid backup file.')}};
+ r.readAsText(f);
+}
+function addCat(){
+ const n=(prompt('New category name')||'').trim();if(!n||db.cats[n])return;
+ const l=(prompt('Five column names, separated by commas')||'').split(',').map(x=>x.trim()).filter(Boolean);
+ if(l.length!==5)return alert('Enter exactly five column names.');db.cats[n]=l;save();render();
+}
+function unlock(){if($('#pin').value===db.pin){$('#lock').style.display='none';render()}else{$('#pin').value='';toast('Wrong PIN')}}
+if(db.pin){$('#lock').style.display='grid'}else render();
+</script></body></html>
