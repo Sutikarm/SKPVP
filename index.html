@@ -26,6 +26,7 @@ nav button.on{color:var(--ac);font-weight:700;box-shadow:inset 0 3px 0 var(--ac)
 #lock>div{width:260px}
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px;border-top:1px solid var(--ln);text-align:left}
 td.n,th.n{text-align:right}
+#sug{max-height:45vh;overflow:auto}.sg{padding:9px 4px;border-top:1px solid var(--ln)}.sg:active{background:#e6f4f1}
 #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;background:var(--ink);color:#fff;padding:8px 14px;border-radius:20px;display:none;z-index:8}
 </style></head><body>
 <div id="lock"><div class="card"><h2>Enter PIN</h2><input id="pin" type="password" inputmode="numeric"><button class="pri" onclick="unlock()">Open</button></div></div>
@@ -43,6 +44,7 @@ td.n,th.n{text-align:right}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>if(typeof jsQR==="undefined"){var js=document.createElement("script");js.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";document.head.appendChild(js)}</script>
 <script>
 const $=s=>document.querySelector(s),K='shopdb1',LIM=[10,10,10,10,15];
 const e=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -106,9 +108,9 @@ async function qrPdf(){
  its.forEach((it,k)=>{
   if(k&&k%36===0)d.addPage();
   const p=k%36,x=5+(p%4)*50,y=4.5+Math.floor(p/4)*32;
-  d.setDrawColor(200);d.rect(x,y,50,32);drawQR(d,it.id,x+14,y+1.5,22);
-  d.setFontSize(6.5);d.setFont('helvetica','bold');d.text(it.id,x+25,y+26,{align:'center'});
-  d.setFont('helvetica','normal');d.setFontSize(5.5);d.text(d.splitTextToSize(desc(it),46).slice(0,2),x+25,y+28.8,{align:'center'});
+  d.setDrawColor(210);d.setLineWidth(.1);d.rect(x,y,50,32);drawQR(d,it.id,x+15,y+3,20);
+  d.setFontSize(6.5);d.setFont('helvetica','bold');d.text(it.id,x+25,y+26.6,{align:'center'});
+  d.setFont('helvetica','normal');d.setFontSize(5.5);d.text(d.splitTextToSize(desc(it),46).slice(0,2),x+25,y+29.2,{align:'center'});
  });
  out(d.output('blob'),'QR-labels-'+today()+'.pdf');
 }
@@ -119,7 +121,7 @@ function bill(){
  return `<div class=card><h2>Customer</h2><input placeholder="Customer name" value="${e(cust.n)}" oninput="cust.n=this.value">
  <input placeholder="Mobile number" inputmode=tel value="${e(cust.m)}" oninput="cust.m=this.value">
  <button id=scanBtn class=pri onclick="scan()">Scan item QR</button>
- <div class=row style="margin-top:8px"><input id=man placeholder="Or type item code"><button onclick="addCode($('#man').value.trim());$('#man').value=''">Add</button></div></div><div id=cartbox></div>`;
+ <input id=man style="margin-top:8px" placeholder="Or type to search item / code" autocomplete=off oninput="sug()" onfocus="sug()" onkeydown="if(event.key==='Enter')pick()"><div id=sug></div></div><div id=cartbox></div>`;
 }
 function drawCart(){
  const rows=cart.map((c,i)=>{const it=db.items.find(x=>x.id===c.id);
@@ -134,27 +136,46 @@ const total=()=>cart.reduce((s,c)=>s+c.qty*item(c.id).price-c.disc,0);
 function cq(i,v){cart[i].qty=Math.max(1,parseInt(v)||1);drawCart()}
 function cd(i,v){cart[i].disc=Math.max(0,parseFloat(v)||0);drawCart()}
 function rm(i){cart.splice(i,1);drawCart()}
+function sug(){
+ const q=$('#man').value.toLowerCase().split(/\s+/).filter(Boolean),av=db.items.filter(i=>i.qty>0);
+ const r=(q.length?av.filter(i=>q.every(w=>(i.id+' '+i.cat+' '+desc(i)).toLowerCase().includes(w))):av.slice().reverse()).slice(0,10);
+ $('#sug').innerHTML=r.map(i=>`<div class=sg onclick="addCode('${i.id}');$('#man').value='';sug()"><b>${e(desc(i))}</b><br><span class=mut>${i.id} | ${e(i.cat)} | Rs ${i.price} | stock ${i.qty}</span></div>`).join('')||'<p class=mut>No matching item in stock</p>';
+}
+function pick(){
+ const v=$('#man').value.trim().toUpperCase();
+ if(item(v))addCode(v);else{const f=document.querySelector('#sug .sg');if(!f)return;f.click();return}
+ $('#man').value='';sug();
+}
 function addCode(code){
- if(!code)return;const it=item(code);
+ code=(code||'').trim().toUpperCase();if(!code)return;const it=item(code);
  if(!it)return toast('Unknown code: '+code);
  if(it.qty<1)return toast('Out of stock');
  const c=cart.find(x=>x.id===code);
  if(c){if(c.qty<it.qty)c.qty++;else return toast('No more stock')}else cart.push({id:code,qty:1,disc:0});
  navigator.vibrate&&navigator.vibrate(60);toast('Added: '+desc(it));drawCart();
 }
-let stream=null,scanOn=false,last='',lastT=0;
+let stream=null,scanOn=false,last='',lastT=0,det=null;
+try{if('BarcodeDetector' in window)det=new BarcodeDetector({formats:['qr_code']})}catch(x){}
 async function scan(){
  if(scanOn)return stopScan();
- try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})}
+ if(!det&&typeof jsQR==='undefined')return alert('Scanner library did not load. Check internet and reopen the app.');
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}})}
  catch(x){return alert('Camera is not available. Open the app from its https address and allow camera access.')}
+ try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]})}catch(x){}
  const v=$('#vid');v.srcObject=stream;v.hidden=false;await v.play();scanOn=true;$('#scanBtn').textContent='Stop scan';
  const c=document.createElement('canvas'),g=c.getContext('2d',{willReadFrequently:true});
- (function loop(){
+ (async function loop(){
   if(!scanOn)return;
-  if(v.videoWidth){const w=Math.min(640,v.videoWidth);c.width=w;c.height=w*v.videoHeight/v.videoWidth;g.drawImage(v,0,0,c.width,c.height);
-   const r=jsQR(g.getImageData(0,0,c.width,c.height).data,c.width,c.height);
-   if(r&&r.data&&(r.data!==last||Date.now()-lastT>2500)){last=r.data;lastT=Date.now();addCode(r.data)}}
-  setTimeout(loop,150);
+  if(v.videoWidth){
+   let code='';
+   try{
+    if(det){const r=await det.detect(v);code=r.length?r[0].rawValue:''}
+    else{const w=Math.min(1024,v.videoWidth);c.width=w;c.height=Math.round(w*v.videoHeight/v.videoWidth);g.drawImage(v,0,0,c.width,c.height);
+     const r=jsQR(g.getImageData(0,0,c.width,c.height).data,c.width,c.height,{inversionAttempts:'dontInvert'});code=r?r.data:''}
+   }catch(x){det=null}
+   if(code&&(code!==last||Date.now()-lastT>2500)){last=code;lastT=Date.now();addCode(code)}
+  }
+  setTimeout(loop,120);
  })();
 }
 function stopScan(){scanOn=false;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$('#vid').hidden=true;const b=$('#scanBtn');if(b)b.textContent='Scan item QR'}
@@ -164,7 +185,7 @@ function conf(){
  for(const c of cart){const it=item(c.id);if(c.qty>it.qty)return alert(`Only ${it.qty} in stock: ${desc(it)}`);if(c.disc>c.qty*it.price)return alert('Discount is more than the item amount.')}
  stopScan();
  const s={no:'B'+String(db.sales.length+1).padStart(4,'0'),date:today(),cust:cust.n.trim(),mob,mode:'',total:total(),
-  lines:cart.map(c=>{const it=item(c.id);return{id:it.id,desc:desc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
+  lines:cart.map(c=>{const it=item(c.id);return{id:it.id,cat:it.cat,desc:desc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
  cart.forEach(c=>item(c.id).qty-=c.qty);db.sales.push(s);save();
  lastPdf=mkBill(s);paid=s;cart=[];cust={n:'',m:''};render();
 }
@@ -200,15 +221,21 @@ async function sendBill(){
  window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(msg));out(lastPdf,s.no+'.pdf');
 }
 /* ---------- REPORTS ---------- */
-let rf=today().slice(0,8)+'01',rt=today();
+let rf=today().slice(0,8)+'01',rt=today(),rc='';
+const lc=l=>l.cat||(item(l.id)||{}).cat||'Other';
 function rep(){
- const ss=db.sales.filter(s=>s.date>=rf&&s.date<=rt);let rev=0,cost=0;
- ss.forEach(s=>s.lines.forEach(l=>{rev+=l.qty*l.price-l.disc;cost+=l.qty*l.cost}));
- const st=db.items.filter(i=>i.qty>0);let sv=0,sc=0;st.forEach(i=>{sv+=i.qty*i.price;sc+=i.qty*i.cost});
- return `<div class=card><h2>Profit and loss</h2><div class=row><label>From<input type=date value=${rf} onchange="rf=this.value;render()"></label><label>To<input type=date value=${rt} onchange="rt=this.value;render()"></label></div>
- <table><tr><td>Bills</td><td class=n>${ss.length}</td></tr><tr><td>Sales (after discount)</td><td class=n>${money(rev)}</td></tr><tr><td>Cost of goods sold</td><td class=n>${money(cost)}</td></tr>
+ const cs=Object.keys(db.cats),ss=db.sales.filter(s=>s.date>=rf&&s.date<=rt),by={};
+ cs.forEach(c=>by[c]={q:0,r:0,c:0});let nb=0;
+ ss.forEach(s=>{let hit=0;s.lines.forEach(l=>{const k=lc(l);by[k]=by[k]||{q:0,r:0,c:0};by[k].q+=l.qty;by[k].r+=l.qty*l.price-l.disc;by[k].c+=l.qty*l.cost;if(!rc||k===rc)hit=1});nb+=hit});
+ let rev=0,cost=0;(rc?[rc]:Object.keys(by)).forEach(k=>{rev+=by[k].r;cost+=by[k].c});
+ const st=db.items.filter(i=>i.qty>0&&(!rc||i.cat===rc));let sv=0,sc=0;st.forEach(i=>{sv+=i.qty*i.price;sc+=i.qty*i.cost});
+ const rows=Object.keys(by).filter(k=>by[k].q).map(k=>`<tr><td>${e(k)}</td><td class=n>${by[k].q}</td><td class=n>${money(by[k].r)}</td><td class=n>${money(by[k].r-by[k].c)}</td></tr>`).join('')||'<tr><td colspan=4 class=mut>No sales in this period</td></tr>';
+ return `<div class=card><h2>Profit and loss</h2><label>Item category<select onchange="rc=this.value;render()"><option value="">All categories</option>${cs.map(c=>`<option ${c===rc?'selected':''}>${e(c)}</option>`).join('')}</select></label>
+ <div class=row><label>From<input type=date value=${rf} onchange="rf=this.value;render()"></label><label>To<input type=date value=${rt} onchange="rt=this.value;render()"></label></div>
+ <table><tr><td>Bills (${e(rc||'all categories')})</td><td class=n>${nb}</td></tr><tr><td>Sales (after discount)</td><td class=n>${money(rev)}</td></tr><tr><td>Cost of goods sold</td><td class=n>${money(cost)}</td></tr>
  <tr><td><b>${rev-cost>=0?'Profit':'Loss'}</b></td><td class=n><b>${money(Math.abs(rev-cost))}</b></td></tr></table></div>
- <div class=card><h2>Stock in hand</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Cost</th><th class=n>Price</th></tr>
+ <div class=card><h2>Category-wise performance</h2><table><tr><th>Category</th><th class=n>Qty sold</th><th class=n>Sales</th><th class=n>Profit</th></tr>${rows}</table></div>
+ <div class=card><h2>Stock in hand (${e(rc||'all categories')})</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Cost</th><th class=n>Price</th></tr>
  ${st.map(i=>`<tr><td>${e(desc(i))}<br><span class=mut>${i.id}</span></td><td class=n>${i.qty}</td><td class=n>${i.cost}</td><td class=n>${i.price}</td></tr>`).join('')}
  <tr><td><b>Stock value</b></td><td></td><td class=n><b>${money(sc)}</b></td><td class=n><b>${money(sv)}</b></td></tr></table></div>`;
 }
