@@ -58,6 +58,7 @@ const save=()=>localStorage.setItem(K,JSON.stringify(db));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
 const money=n=>'Rs '+Number(n).toFixed(2);
+const VER='2026-10-10-c';
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
 let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
 const T={bill,stock,qr,rep,set};
@@ -285,6 +286,7 @@ function set(){
  <label>App PIN (leave empty for none)<input type=password inputmode=numeric value="${e(db.pin)}" onchange="db.pin=this.value;save()"></label></div>
  <div class=card><h2>Backup</h2><p class=mut>Backup files contain customer names and numbers. Keep them in a private folder.</p>
  <button class=pri onclick="backup()">Backup now</button><label style="margin-top:10px">Restore from backup file<input type=file accept=".json" onchange="restore(this.files[0])"></label></div>
+ <div class=card><h2>App version</h2><p>Version <b>${VER}</b></p><button class=pri onclick="reloadApp()">Reload latest version</button><p class=mut>Use this after you upload a new index.html to GitHub. Your stock and sales stay safe.</p></div>
  <div class=card><h2>Categories</h2><p class=mut>${Object.keys(db.cats).map(e).join(', ')}</p><button class=pri onclick="addCat()">Add new category</button></div>`;
 }
 async function backup(){
@@ -304,6 +306,12 @@ function addCat(){
  const l=(prompt('Five column names, separated by commas')||'').split(',').map(x=>x.trim()).filter(Boolean);
  if(l.length!==5)return alert('Enter exactly five column names.');db.cats[n]=l;save();render();
 }
+async function reloadApp(){
+ try{await fetch(location.pathname,{cache:'reload'})}catch(x){}
+ try{if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)))}}catch(x){}
+ location.reload();
+}
 function unlock(){if($('#pin').value===db.pin){$('#lock').style.display='none';render()}else{$('#pin').value='';toast('Wrong PIN')}}
+{const lu=db.sales[db.sales.length-1];if(lu&&lu.st&&lu.date===today()&&pst(lu)!=='Paid'&&lu.mode!=='Pay later')paid=lu}
 if(db.pin){$('#lock').style.display='grid'}else render();
 </script></body></html>
