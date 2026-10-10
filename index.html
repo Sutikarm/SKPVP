@@ -98,19 +98,25 @@ function drawQR(d,t,x,y,s){
  const q=qrcode(0,'M');q.addData(t);q.make();const n=q.getModuleCount(),m=s/n;d.setFillColor(0);
  for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(q.isDark(r,c))d.rect(x+c*m,y+r*m,m+.02,m+.02,'F');
 }
-function qr(){
- const n=db.items.filter(i=>i.qty>0).length;
- return `<div class=card><h2>QR labels</h2><p>${n} items in stock. One QR per item, 36 labels per A4 sheet.</p><button class=pri onclick="qrPdf()">Create QR PDF</button></div>`;
+function grid(){
+ const QS=Math.min(30,Math.max(15,parseFloat(db.shop.qs)||20)),cw=QS+6,ch=QS+11,cols=Math.floor(200/cw),rows=Math.floor(287/ch);
+ return{QS,cw,ch,cols,rows,per:cols*rows};
 }
+function qr(){
+ const n=db.items.filter(i=>i.qty>0).length,g=grid();
+ return `<div class=card><h2>QR labels</h2><p>${n} items in stock. Each label has the QR with the item code and rate just below it. ${g.per} labels per A4 sheet (${g.cw} x ${g.ch} mm each). You can change the QR size in Settings.</p><button class=pri onclick="qrPdf()">Create QR PDF</button></div>`;
+}
+function fit(d,t,w,max){d.setFont('helvetica','bold');d.setFontSize(max);const tw=d.getTextWidth(t),f=tw>w?max*w/tw:max;d.setFontSize(f);return f}
 async function qrPdf(){
  const its=db.items.filter(i=>i.qty>0);if(!its.length)return alert('No stock available.');
- const {jsPDF}=window.jspdf,d=new jsPDF({unit:'mm',format:'a4'});
+ const {jsPDF}=window.jspdf,d=new jsPDF({unit:'mm',format:'a4'}),g=grid(),ox=(210-g.cols*g.cw)/2,oy=(297-g.rows*g.ch)/2;
+ d.setDrawColor(200);d.setLineWidth(.1);d.setTextColor(0);
  its.forEach((it,k)=>{
-  if(k&&k%36===0)d.addPage();
-  const p=k%36,x=5+(p%4)*50,y=4.5+Math.floor(p/4)*32;
-  d.setDrawColor(210);d.setLineWidth(.1);d.rect(x,y,50,32);drawQR(d,it.id+'|'+it.price,x+4,y+3,20);d.setFontSize(7);d.setFont('helvetica','normal');d.text('Rate',x+37.5,y+8.5,{align:'center'});d.setFontSize(11);d.setFont('helvetica','bold');d.text('Rs '+(Number.isInteger(it.price)?it.price:it.price.toFixed(2)),x+37.5,y+15,{align:'center'});
-  d.setFontSize(6.5);d.setFont('helvetica','bold');d.text(it.id,x+25,y+26.6,{align:'center'});
-  d.setFont('helvetica','normal');d.setFontSize(5.5);d.text(d.splitTextToSize(desc(it),46).slice(0,2),x+25,y+29.2,{align:'center'});
+  if(k&&k%g.per===0)d.addPage();
+  const p=k%g.per,x=ox+(p%g.cols)*g.cw,y=oy+Math.floor(p/g.cols)*g.ch,qy=y+2.5,mx=x+g.cw/2;
+  d.rect(x,y,g.cw,g.ch);drawQR(d,it.id+'|'+it.price,x+3,qy,g.QS);
+  const f1=fit(d,it.id,g.QS,12),b1=qy+g.QS+1.8+f1*.254;d.text(it.id,mx,b1,{align:'center'});
+  const pt='Rs '+(Number.isInteger(it.price)?it.price:it.price.toFixed(2)),f2=fit(d,pt,g.QS,10),b2=b1+.9+f2*.254;d.text(pt,mx,b2,{align:'center'});
  });
  out(d.output('blob'),'QR-labels-'+today()+'.pdf');
 }
@@ -187,7 +193,7 @@ function conf(){
  const s={no:'B'+String(db.sales.length+1).padStart(4,'0'),date:today(),cust:cust.n.trim(),mob,mode:'',st:'Unpaid',paidOn:'',total:total(),
   lines:cart.map(c=>{const it=item(c.id);return{id:it.id,cat:it.cat,desc:desc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
  cart.forEach(c=>item(c.id).qty-=c.qty);db.sales.push(s);save();
- lastPdf=mkBill(s);paid=s;cart=[];cust={n:'',m:''};render();
+ lastPdf=null;paid=s;cart=[];cust={n:'',m:''};render();
 }
 const upiLink=amt=>`upi://pay?pa=${encodeURIComponent(db.shop.upi)}&pn=${encodeURIComponent(db.shop.name)}&am=${amt.toFixed(2)}&cu=INR`;
 function mkBill(s){
@@ -203,28 +209,34 @@ function mkBill(s){
   y+=t.length*3.5;if(l.disc){d.text('Discount',6,y);d.text('-'+l.disc.toFixed(2),99,y,{align:'right'});y+=3.5}y+=1;
  });
  d.line(6,y,99,y);y+=5;d.setFont('helvetica','bold');d.setFontSize(10);d.text('Total',6,y);d.text(money(s.total),99,y,{align:'right'});
- if(db.shop.upi){y+=4;if(y+30>142){d.addPage();y=8}drawQR(d,upiLink(s.total),6,y,26);d.setFontSize(8);d.text('Scan to pay',36,y+12)}
+ const ok=pst(s)==='Paid';y+=5.5;d.setFontSize(9);d.text(ok?`PAYMENT RECEIVED (${s.mode})`:'PAYMENT PENDING',6,y);
+ if(db.shop.upi&&!ok){y+=2;if(y+30>142){d.addPage();y=8}drawQR(d,upiLink(s.total),6,y,26);d.setFontSize(8);d.text('Scan to pay',36,y+12)}
  d.setFont('helvetica','normal');d.setFontSize(7);d.text('Thank you! Please visit again.',52.5,145,{align:'center'});
  return d.output('blob');
 }
 const pst=s=>s.st||(s.mode?'Paid':'Unpaid');
 function payView(){
- const s=paid,ok=pst(s)==='Paid',later=s.mode==='Pay later';
- const qrImg=!ok&&s.mode==='QR Code'&&db.shop.upi?(()=>{const q=qrcode(0,'M');q.addData(upiLink(s.total));q.make();return `<p>Customer scans to pay ${money(s.total)}</p>${q.createImgTag(6)}`})():'';
+ const s=paid,ok=pst(s)==='Paid',later=s.mode==='Pay later',done=ok||later;
+ const qrImg=!done&&s.mode==='QR Code'&&db.shop.upi?(()=>{const q=qrcode(0,'M');q.addData(upiLink(s.total));q.make();return `<p>Customer scans to pay ${money(s.total)}</p>${q.createImgTag(6)}`})():'';
  const bad='<b style="color:var(--bad)">';
  let body;
- if(!s.mode)body=`<p>How will the customer pay?</p><div class=row><button class=pri onclick="pm('Cash')">Cash</button><button class=pri onclick="pm('QR Code')">QR Code</button></div><button class=pri style="background:#fff;color:var(--ink)" onclick="pm('Pay later')">Pay later (keep bill unpaid)</button>`;
- else body=`<p>${ok?`<b>Payment received</b> (${e(s.mode)}) on ${e(s.paidOn||s.date)}`:later?`${bad}Unpaid</b> - saved as pending`:`Mode: <b>${e(s.mode)}</b> - ${bad}payment not confirmed yet</b>`}</p>${qrImg}
- ${ok?'':later?`<div class=row><button class=pri onclick="recv('${s.no}','Cash')">Received cash</button><button class=pri onclick="recv('${s.no}','QR Code')">Received by QR</button></div>`:`<button class=pri onclick="recv('${s.no}','${s.mode}')">Confirm payment received</button><button class=lnk onclick="paid.mode='';save();render()">Change mode</button>`}
+ if(!s.mode)body=`<p>How will the customer pay? The bill PDF is made after this step and will carry the payment remark.</p><div class=row><button class=pri onclick="pm('Cash')">Cash</button><button class=pri onclick="pm('QR Code')">QR Code</button></div><button class=pri style="background:#fff;color:var(--ink)" onclick="pm('Pay later')">Pay later (bill shows Payment Pending)</button>`;
+ else if(!done)body=`<p>Mode: <b>${e(s.mode)}</b> - ${bad}payment not confirmed yet</b></p>${qrImg}<button class=pri onclick="recv('${s.no}','${s.mode}')">Confirm payment received</button><button class=lnk onclick="pm('Pay later')">Customer will pay later</button><button class=lnk onclick="paid.mode='';save();render()">Change mode</button>`;
+ else body=`<p>${ok?`<b>Payment received</b> (${e(s.mode)}) on ${e(s.paidOn||s.date)}. The bill shows Payment Received.`:`${bad}Unpaid</b> - the bill shows Payment Pending.`}</p>
+ ${ok?'':`<div class=row><button class=pri onclick="recv('${s.no}','Cash')">Received cash</button><button class=pri onclick="recv('${s.no}','QR Code')">Received by QR</button></div>`}
  <button class=pri onclick="sendBill()">Send bill to customer</button><button class=pri onclick="out(lastPdf,'${s.no}.pdf')">Open bill PDF</button><button class=pri onclick="paid=null;render()">New bill</button>`;
  return `<div class=card><h2>Bill ${s.no} saved</h2><div class=tot>${money(s.total)}</div>${body}</div>`;
 }
-function pm(m){if(m==='QR Code'&&!db.shop.upi)alert('Add your UPI ID in Settings to show a payment QR. The mode is still saved.');paid.mode=m;save();render()}
+function pm(m){
+ if(m==='QR Code'&&!db.shop.upi)alert('Add your UPI ID in Settings to show a payment QR. The mode is still saved.');
+ paid.mode=m;if(m==='Pay later'){paid.st='Unpaid';lastPdf=mkBill(paid)}save();render();
+}
 function recv(no,mode){
  const s=db.sales.find(x=>x.no===no);if(!s)return;
  if(!confirm(`Confirm ${money(s.total)} received from ${s.cust} (${mode})?`))return;
- s.mode=mode;s.st='Paid';s.paidOn=today();save();toast('Payment recorded');render();
+ s.mode=mode;s.st='Paid';s.paidOn=today();if(paid&&paid.no===s.no)lastPdf=mkBill(s);save();toast('Payment recorded');render();
 }
+function reprint(no){const s=db.sales.find(x=>x.no===no);if(s)out(mkBill(s),s.no+'.pdf')}
 function remind(no){
  const s=db.sales.find(x=>x.no===no);if(!s)return;
  const m=`Dear ${s.cust}, your bill ${s.no} dated ${s.date} for ${money(s.total)} at ${db.shop.name} is pending.${db.shop.upi?' You can pay by UPI to '+db.shop.upi+'.':''} Thank you.`;
@@ -261,7 +273,7 @@ function billsCard(){
  bl=bl.filter(s=>!rc||s.lines.some(l=>lc(l)===rc)).slice().reverse();
  const rows=bl.slice(0,100).map(s=>{const ok=pst(s)==='Paid';
   return `<div class=it><b>${e(s.no)}</b> ${e(s.date)} | ${e(s.cust)} <span class=mut>${e(s.mob)}</span><br>${money(s.total)} - ${ok?`<b>Paid</b> (${e(s.mode)}${s.paidOn?' on '+e(s.paidOn):''})`:`<b style="color:var(--bad)">Unpaid</b>`}
-  ${ok?'':`<div><button class=lnk onclick="recv('${s.no}','Cash')">Received cash</button><button class=lnk onclick="recv('${s.no}','QR Code')">Received by QR</button><button class=lnk onclick="remind('${s.no}')">Remind</button></div>`}</div>`}).join('')||'<p class=mut>No bills to show.</p>';
+  <div>${ok?'':`<button class=lnk onclick="recv('${s.no}','Cash')">Received cash</button><button class=lnk onclick="recv('${s.no}','QR Code')">Received by QR</button><button class=lnk onclick="remind('${s.no}')">Remind</button>`}<button class=lnk onclick="reprint('${s.no}')">Bill PDF</button></div></div>`}).join('')||'<p class=mut>No bills to show.</p>';
  return `<div class=card><h2>Bills and payments</h2><p>All unpaid bills (any date): <b style="color:var(--bad)">${money(dueAmt)}</b> in ${due.length} bill${due.length===1?'':'s'}</p>
  <label>Show<select onchange="pf=this.value;render()"><option value="Unpaid" ${pf==='Unpaid'?'selected':''}>Unpaid (all dates)</option><option value="Paid" ${pf==='Paid'?'selected':''}>Paid (selected dates)</option><option value="All" ${pf==='All'?'selected':''}>All bills (selected dates)</option></select></label>${rows}${bl.length>100?'<p class=mut>Showing the latest 100 bills.</p>':''}</div>`;
 }
@@ -269,6 +281,7 @@ function billsCard(){
 function set(){
  return `<div class=card><h2>Shop</h2><label>Shop name<input value="${e(db.shop.name)}" onchange="db.shop.name=this.value;save()"></label>
  <label>UPI ID for payment QR<input value="${e(db.shop.upi)}" placeholder="name@bank" onchange="db.shop.upi=this.value.trim();save()"></label>
+ <label>QR size on labels, in mm (15 to 30)<input type=number inputmode=numeric min=15 max=30 value="${db.shop.qs||20}" onchange="db.shop.qs=Math.min(30,Math.max(15,parseFloat(this.value)||20));save();this.value=db.shop.qs"></label>
  <label>App PIN (leave empty for none)<input type=password inputmode=numeric value="${e(db.pin)}" onchange="db.pin=this.value;save()"></label></div>
  <div class=card><h2>Backup</h2><p class=mut>Backup files contain customer names and numbers. Keep them in a private folder.</p>
  <button class=pri onclick="backup()">Backup now</button><label style="margin-top:10px">Restore from backup file<input type=file accept=".json" onchange="restore(this.files[0])"></label></div>
