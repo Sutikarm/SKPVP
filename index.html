@@ -58,7 +58,7 @@ const save=()=>localStorage.setItem(K,JSON.stringify(db));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
 const money=n=>'Rs '+Number(n).toFixed(2);
-function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',1800)}
+function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
 let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
 const T={bill,stock,qr,rep,set};
 function go(t){tab=t;stopScan();render()}
@@ -108,7 +108,7 @@ async function qrPdf(){
  its.forEach((it,k)=>{
   if(k&&k%36===0)d.addPage();
   const p=k%36,x=5+(p%4)*50,y=4.5+Math.floor(p/4)*32;
-  d.setDrawColor(210);d.setLineWidth(.1);d.rect(x,y,50,32);drawQR(d,it.id,x+15,y+3,20);
+  d.setDrawColor(210);d.setLineWidth(.1);d.rect(x,y,50,32);drawQR(d,it.id+'|'+it.price,x+4,y+3,20);d.setFontSize(7);d.setFont('helvetica','normal');d.text('Rate',x+37.5,y+8.5,{align:'center'});d.setFontSize(11);d.setFont('helvetica','bold');d.text('Rs '+(Number.isInteger(it.price)?it.price:it.price.toFixed(2)),x+37.5,y+15,{align:'center'});
   d.setFontSize(6.5);d.setFont('helvetica','bold');d.text(it.id,x+25,y+26.6,{align:'center'});
   d.setFont('helvetica','normal');d.setFontSize(5.5);d.text(d.splitTextToSize(desc(it),46).slice(0,2),x+25,y+29.2,{align:'center'});
  });
@@ -146,13 +146,13 @@ function pick(){
  if(item(v))addCode(v);else{const f=document.querySelector('#sug .sg');if(!f)return;f.click();return}
  $('#man').value='';sug();
 }
-function addCode(code){
- code=(code||'').trim().toUpperCase();if(!code)return;const it=item(code);
+function addCode(raw){
+ const pr=String(raw||'').split('|'),code=pr[0].trim().toUpperCase(),qp=pr.length>1?parseFloat(pr[1]):NaN;if(!code)return;const it=item(code);
  if(!it)return toast('Unknown code: '+code);
  if(it.qty<1)return toast('Out of stock');
  const c=cart.find(x=>x.id===code);
  if(c){if(c.qty<it.qty)c.qty++;else return toast('No more stock')}else cart.push({id:code,qty:1,disc:0});
- navigator.vibrate&&navigator.vibrate(60);toast('Added: '+desc(it));drawCart();
+ navigator.vibrate&&navigator.vibrate(60);const mm=!isNaN(qp)&&Math.abs(qp-it.price)>0.001;toast('Added: '+desc(it)+(mm?` (label Rs ${qp}, current rate Rs ${it.price} used)`:''),mm?4000:1800);drawCart();
 }
 let stream=null,scanOn=false,last='',lastT=0,det=null;
 try{if('BarcodeDetector' in window)det=new BarcodeDetector({formats:['qr_code']})}catch(x){}
@@ -184,7 +184,7 @@ function conf(){
  if(!cust.n.trim()||mob.length!==10)return alert('Enter customer name and a 10-digit mobile number.');
  for(const c of cart){const it=item(c.id);if(c.qty>it.qty)return alert(`Only ${it.qty} in stock: ${desc(it)}`);if(c.disc>c.qty*it.price)return alert('Discount is more than the item amount.')}
  stopScan();
- const s={no:'B'+String(db.sales.length+1).padStart(4,'0'),date:today(),cust:cust.n.trim(),mob,mode:'',total:total(),
+ const s={no:'B'+String(db.sales.length+1).padStart(4,'0'),date:today(),cust:cust.n.trim(),mob,mode:'',st:'Unpaid',paidOn:'',total:total(),
   lines:cart.map(c=>{const it=item(c.id);return{id:it.id,cat:it.cat,desc:desc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
  cart.forEach(c=>item(c.id).qty-=c.qty);db.sales.push(s);save();
  lastPdf=mkBill(s);paid=s;cart=[];cust={n:'',m:''};render();
@@ -207,16 +207,31 @@ function mkBill(s){
  d.setFont('helvetica','normal');d.setFontSize(7);d.text('Thank you! Please visit again.',52.5,145,{align:'center'});
  return d.output('blob');
 }
+const pst=s=>s.st||(s.mode?'Paid':'Unpaid');
 function payView(){
- const s=paid;
- const qrImg=s.mode==='QR Code'&&db.shop.upi?(()=>{const q=qrcode(0,'M');q.addData(upiLink(s.total));q.make();return `<p>Customer scans to pay ${money(s.total)}</p>${q.createImgTag(6)}`})():'';
- return `<div class=card><h2>Bill ${s.no} saved</h2><div class=tot>${money(s.total)}</div>
- ${s.mode?`<p>Payment mode: <b>${s.mode}</b></p>${qrImg}<button class=pri onclick="sendBill()">Send bill to customer</button><button class=pri onclick="out(lastPdf,'${s.no}.pdf')">Open bill PDF</button><button class=pri onclick="paid=null;render()">New bill</button>`
- :`<p>Payment mode</p><div class=row><button class=pri onclick="pm('Cash')">Cash</button><button class=pri onclick="pm('QR Code')">QR Code</button></div>`}</div>`;
+ const s=paid,ok=pst(s)==='Paid',later=s.mode==='Pay later';
+ const qrImg=!ok&&s.mode==='QR Code'&&db.shop.upi?(()=>{const q=qrcode(0,'M');q.addData(upiLink(s.total));q.make();return `<p>Customer scans to pay ${money(s.total)}</p>${q.createImgTag(6)}`})():'';
+ const bad='<b style="color:var(--bad)">';
+ let body;
+ if(!s.mode)body=`<p>How will the customer pay?</p><div class=row><button class=pri onclick="pm('Cash')">Cash</button><button class=pri onclick="pm('QR Code')">QR Code</button></div><button class=pri style="background:#fff;color:var(--ink)" onclick="pm('Pay later')">Pay later (keep bill unpaid)</button>`;
+ else body=`<p>${ok?`<b>Payment received</b> (${e(s.mode)}) on ${e(s.paidOn||s.date)}`:later?`${bad}Unpaid</b> - saved as pending`:`Mode: <b>${e(s.mode)}</b> - ${bad}payment not confirmed yet</b>`}</p>${qrImg}
+ ${ok?'':later?`<div class=row><button class=pri onclick="recv('${s.no}','Cash')">Received cash</button><button class=pri onclick="recv('${s.no}','QR Code')">Received by QR</button></div>`:`<button class=pri onclick="recv('${s.no}','${s.mode}')">Confirm payment received</button><button class=lnk onclick="paid.mode='';save();render()">Change mode</button>`}
+ <button class=pri onclick="sendBill()">Send bill to customer</button><button class=pri onclick="out(lastPdf,'${s.no}.pdf')">Open bill PDF</button><button class=pri onclick="paid=null;render()">New bill</button>`;
+ return `<div class=card><h2>Bill ${s.no} saved</h2><div class=tot>${money(s.total)}</div>${body}</div>`;
 }
 function pm(m){if(m==='QR Code'&&!db.shop.upi)alert('Add your UPI ID in Settings to show a payment QR. The mode is still saved.');paid.mode=m;save();render()}
+function recv(no,mode){
+ const s=db.sales.find(x=>x.no===no);if(!s)return;
+ if(!confirm(`Confirm ${money(s.total)} received from ${s.cust} (${mode})?`))return;
+ s.mode=mode;s.st='Paid';s.paidOn=today();save();toast('Payment recorded');render();
+}
+function remind(no){
+ const s=db.sales.find(x=>x.no===no);if(!s)return;
+ const m=`Dear ${s.cust}, your bill ${s.no} dated ${s.date} for ${money(s.total)} at ${db.shop.name} is pending.${db.shop.upi?' You can pay by UPI to '+db.shop.upi+'.':''} Thank you.`;
+ window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(m));
+}
 async function sendBill(){
- const s=paid,f=new File([lastPdf],s.no+'.pdf',{type:'application/pdf'}),msg=`${db.shop.name}: Bill ${s.no}, total ${money(s.total)}. Thank you!`;
+ const s=paid,f=new File([lastPdf],s.no+'.pdf',{type:'application/pdf'}),msg=`${db.shop.name}: Bill ${s.no}, total ${money(s.total)}.${pst(s)==='Paid'?'':' Payment pending.'+(db.shop.upi?' UPI: '+db.shop.upi:'')} Thank you!`;
  if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],text:msg})}catch(x){}return}
  window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(msg));out(lastPdf,s.no+'.pdf');
 }
@@ -225,19 +240,30 @@ let rf=today().slice(0,8)+'01',rt=today(),rc='';
 const lc=l=>l.cat||(item(l.id)||{}).cat||'Other';
 function rep(){
  const cs=Object.keys(db.cats),ss=db.sales.filter(s=>s.date>=rf&&s.date<=rt),by={};
- cs.forEach(c=>by[c]={q:0,r:0,c:0});let nb=0;
- ss.forEach(s=>{let hit=0;s.lines.forEach(l=>{const k=lc(l);by[k]=by[k]||{q:0,r:0,c:0};by[k].q+=l.qty;by[k].r+=l.qty*l.price-l.disc;by[k].c+=l.qty*l.cost;if(!rc||k===rc)hit=1});nb+=hit});
+ cs.forEach(c=>by[c]={q:0,r:0,c:0});let nb=0,rcv=0,due=0;
+ ss.forEach(s=>{let hit=0;const ps=pst(s)==='Paid';s.lines.forEach(l=>{const k=lc(l);if(!rc||k===rc){const a=l.qty*l.price-l.disc;if(ps)rcv+=a;else due+=a}by[k]=by[k]||{q:0,r:0,c:0};by[k].q+=l.qty;by[k].r+=l.qty*l.price-l.disc;by[k].c+=l.qty*l.cost;if(!rc||k===rc)hit=1});nb+=hit});
  let rev=0,cost=0;(rc?[rc]:Object.keys(by)).forEach(k=>{rev+=by[k].r;cost+=by[k].c});
  const st=db.items.filter(i=>i.qty>0&&(!rc||i.cat===rc));let sv=0,sc=0;st.forEach(i=>{sv+=i.qty*i.price;sc+=i.qty*i.cost});
  const rows=Object.keys(by).filter(k=>by[k].q).map(k=>`<tr><td>${e(k)}</td><td class=n>${by[k].q}</td><td class=n>${money(by[k].r)}</td><td class=n>${money(by[k].r-by[k].c)}</td></tr>`).join('')||'<tr><td colspan=4 class=mut>No sales in this period</td></tr>';
  return `<div class=card><h2>Profit and loss</h2><label>Item category<select onchange="rc=this.value;render()"><option value="">All categories</option>${cs.map(c=>`<option ${c===rc?'selected':''}>${e(c)}</option>`).join('')}</select></label>
  <div class=row><label>From<input type=date value=${rf} onchange="rf=this.value;render()"></label><label>To<input type=date value=${rt} onchange="rt=this.value;render()"></label></div>
- <table><tr><td>Bills (${e(rc||'all categories')})</td><td class=n>${nb}</td></tr><tr><td>Sales (after discount)</td><td class=n>${money(rev)}</td></tr><tr><td>Cost of goods sold</td><td class=n>${money(cost)}</td></tr>
- <tr><td><b>${rev-cost>=0?'Profit':'Loss'}</b></td><td class=n><b>${money(Math.abs(rev-cost))}</b></td></tr></table></div>
+ <table><tr><td>Bills (${e(rc||'all categories')})</td><td class=n>${nb}</td></tr><tr><td>Sales billed (after discount)</td><td class=n>${money(rev)}</td></tr><tr><td>&nbsp;&nbsp;Payment received</td><td class=n>${money(rcv)}</td></tr><tr><td>&nbsp;&nbsp;Payment pending</td><td class=n style="color:var(--bad)">${money(due)}</td></tr><tr><td>Cost of goods sold</td><td class=n>${money(cost)}</td></tr>
+ <tr><td><b>${rev-cost>=0?'Profit':'Loss'}</b></td><td class=n><b>${money(Math.abs(rev-cost))}</b></td></tr></table><p class=mut>Profit is worked out on billed sales, including bills still unpaid.</p></div>
  <div class=card><h2>Category-wise performance</h2><table><tr><th>Category</th><th class=n>Qty sold</th><th class=n>Sales</th><th class=n>Profit</th></tr>${rows}</table></div>
- <div class=card><h2>Stock in hand (${e(rc||'all categories')})</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Cost</th><th class=n>Price</th></tr>
+ ${billsCard()}<div class=card><h2>Stock in hand (${e(rc||'all categories')})</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Cost</th><th class=n>Price</th></tr>
  ${st.map(i=>`<tr><td>${e(desc(i))}<br><span class=mut>${i.id}</span></td><td class=n>${i.qty}</td><td class=n>${i.cost}</td><td class=n>${i.price}</td></tr>`).join('')}
  <tr><td><b>Stock value</b></td><td></td><td class=n><b>${money(sc)}</b></td><td class=n><b>${money(sv)}</b></td></tr></table></div>`;
+}
+let pf='Unpaid';
+function billsCard(){
+ const due=db.sales.filter(s=>pst(s)!=='Paid'),dueAmt=due.reduce((a,s)=>a+s.total,0);
+ let bl=pf==='Unpaid'?due:db.sales.filter(s=>s.date>=rf&&s.date<=rt&&(pf==='All'||pst(s)==='Paid'));
+ bl=bl.filter(s=>!rc||s.lines.some(l=>lc(l)===rc)).slice().reverse();
+ const rows=bl.slice(0,100).map(s=>{const ok=pst(s)==='Paid';
+  return `<div class=it><b>${e(s.no)}</b> ${e(s.date)} | ${e(s.cust)} <span class=mut>${e(s.mob)}</span><br>${money(s.total)} - ${ok?`<b>Paid</b> (${e(s.mode)}${s.paidOn?' on '+e(s.paidOn):''})`:`<b style="color:var(--bad)">Unpaid</b>`}
+  ${ok?'':`<div><button class=lnk onclick="recv('${s.no}','Cash')">Received cash</button><button class=lnk onclick="recv('${s.no}','QR Code')">Received by QR</button><button class=lnk onclick="remind('${s.no}')">Remind</button></div>`}</div>`}).join('')||'<p class=mut>No bills to show.</p>';
+ return `<div class=card><h2>Bills and payments</h2><p>All unpaid bills (any date): <b style="color:var(--bad)">${money(dueAmt)}</b> in ${due.length} bill${due.length===1?'':'s'}</p>
+ <label>Show<select onchange="pf=this.value;render()"><option value="Unpaid" ${pf==='Unpaid'?'selected':''}>Unpaid (all dates)</option><option value="Paid" ${pf==='Paid'?'selected':''}>Paid (selected dates)</option><option value="All" ${pf==='All'?'selected':''}>All bills (selected dates)</option></select></label>${rows}${bl.length>100?'<p class=mut>Showing the latest 100 bills.</p>':''}</div>`;
 }
 /* ---------- SETTINGS ---------- */
 function set(){
