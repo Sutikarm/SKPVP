@@ -58,7 +58,7 @@ const save=()=>localStorage.setItem(K,JSON.stringify(db));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
 const money=n=>'Rs '+Number(n).toFixed(2);
-const VER='2026-10-10-e';
+const VER='2026-10-11-b';
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
 let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
 const T={bill,stock,qr,rep,set};
@@ -218,8 +218,8 @@ function mkBill(s){
  });
  d.line(6,y,99,y);y+=5;d.setFont('helvetica','bold');d.setFontSize(10);d.text('Total',6,y);d.text(money(s.total),99,y,{align:'right'});
  const ok=pst(s)==='Paid';if(ok){y+=5.5;d.setFontSize(9);d.text(`PAYMENT RECEIVED (${s.mode})`,6,y)}
- if(db.shop.upi&&!ok){y+=4;if(y+30>142){d.addPage();y=8}drawQR(d,upiLink(s.total),6,y,26);d.setFontSize(8);d.text('Scan to pay',36,y+12)}
- d.setFont('helvetica','normal');d.setFontSize(7);d.text('Thank you! Please visit again.',52.5,145,{align:'center'});
+ if(db.shop.upi&&!ok){y+=4;if(y+30>136){d.addPage();y=8}drawQR(d,upiLink(s.total),6,y,26);d.setFontSize(8);d.text('Scan to pay',36,y+12)}
+ d.setFont('helvetica','normal');d.setFontSize(7);d.text('Thank you! Please visit again.',52.5,140.5,{align:'center'});d.text('Save Paper Save Trees',52.5,144.5,{align:'center'});
  return d.output('blob');
 }
 const pst=s=>s.st||(s.mode?'Paid':'Unpaid');
