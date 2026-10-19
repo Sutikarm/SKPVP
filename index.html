@@ -58,7 +58,7 @@ const save=()=>localStorage.setItem(K,JSON.stringify(db));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
 const money=n=>'Rs '+Number(n).toFixed(2);
-const VER='2026-10-19-a';
+const VER='2026-10-19-b';
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
 let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
 const T={bill,stock,qr,rep,set};
@@ -315,15 +315,24 @@ function set(){
  <label>QR size on labels, in mm (15 to 30)<input type=number inputmode=numeric min=15 max=30 value="${db.shop.qs||20}" onchange="db.shop.qs=Math.min(30,Math.max(15,parseFloat(this.value)||20));save();this.value=db.shop.qs"></label>
  <label>App PIN (leave empty for none)<input type=password inputmode=numeric value="${e(db.pin)}" onchange="db.pin=this.value;save()"></label></div>
  <div class=card><h2>Backup</h2><p class=mut>Backup files contain customer names and numbers. Keep them in a private folder.</p>
- <button class=pri onclick="backup()">Backup now</button><label style="margin-top:10px">Restore from backup file<input type=file accept=".json" onchange="restore(this.files[0])"></label></div>
+ <p class=mut>Last backup: ${db.lastBackup?new Date(db.lastBackup).toLocaleString():'never'}</p>
+ <button class=pri onclick="backup('save')">Save backup file to Downloads</button>${isMobile&&navigator.canShare?`<button class=pri onclick="backup('share')">Share backup (Drive, WhatsApp...)</button>`:''}<label style="margin-top:10px">Restore from backup file<input type=file accept=".json" onchange="restore(this.files[0])"></label></div>
  <div class=card><h2>App version</h2><p>Version <b>${VER}</b></p><button class=pri onclick="reloadApp()">Reload latest version</button><p class=mut>Use this after you upload a new index.html to GitHub. Your stock and sales stay safe.</p></div>
  <div class=card><h2>Categories</h2><p class=mut>${Object.keys(db.cats).map(e).join(', ')}</p><button class=pri onclick="addCat()">Add new category</button></div>`;
 }
-async function backup(){
+const isMobile=/Android|iPhone|iPad|Mobile/i.test((navigator&&navigator.userAgent)||'');
+function dl(f){
+ const u=URL.createObjectURL(f),a=document.createElement('a');a.href=u;a.download=f.name;a.style.display='none';
+ document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},5000);
+}
+async function backup(mode){
  const f=new File([JSON.stringify(db)],'shop-backup-'+today()+'.json',{type:'application/json'});
- db.lastBackup=Date.now();save();
- if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f]})}catch(x){}}
- else{const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;a.click()}
+ if(mode==='share'&&navigator.canShare&&navigator.canShare({files:[f]})){
+  try{await navigator.share({files:[f]});db.lastBackup=Date.now();save();toast('Backup shared',2500);render();return}
+  catch(x){if(x&&x.name==='AbortError'){render();return}}
+ }
+ try{dl(f);db.lastBackup=Date.now();save();toast('Backup saved as '+f.name+'. Look in your Downloads folder.',4500)}
+ catch(x){alert('Backup could not be saved: '+(x&&x.message||x))}
  render();
 }
 function restore(f){
