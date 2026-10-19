@@ -58,7 +58,7 @@ const save=()=>localStorage.setItem(K,JSON.stringify(db));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
 const money=n=>'Rs '+Number(n).toFixed(2);
-const VER='2026-10-11-b';
+const VER='2026-10-19-a';
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
 let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
 const T={bill,stock,qr,rep,set};
@@ -67,7 +67,7 @@ function render(){
  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
  $('#warn').hidden=!(db.sales.length&&Date.now()-db.lastBackup>864e5);
  $('#main').innerHTML=T[tab]();
- if(tab==='stock')lab();if(tab==='bill'&&!paid)drawCart();
+ if(tab==='stock')lab();if(tab==='qr')lrows();if(tab==='bill'&&!paid)drawCart();
 }
 /* ---------- STOCK ---------- */
 function stock(){
@@ -103,13 +103,34 @@ function grid(){
  const QS=Math.min(30,Math.max(15,parseFloat(db.shop.qs)||20)),cw=QS+6,ch=QS+11,cols=Math.floor(200/cw),rows=Math.floor(287/ch);
  return{QS,cw,ch,cols,rows,per:cols*rows};
 }
+let lq={},lf='';
+const lcount=i=>(i.id in lq)?lq[i.id]:i.qty;
 function qr(){
- const n=db.items.filter(i=>i.qty>0).length,g=grid();
- return `<div class=card><h2>QR labels</h2><p>${n} items in stock. Each label has the QR with the item code and rate just below it. ${g.per} labels per A4 sheet (${g.cw} x ${g.ch} mm each). You can change the QR size in Settings.</p><button class=pri onclick="qrPdf()">Create QR PDF</button></div>`;
+ const g=grid();
+ return `<div class=card><h2>QR labels</h2><p>Choose how many labels to print for each item. The box starts at the quantity in stock. Set 0 to skip an item. ${g.per} labels per A4 sheet (${g.cw} x ${g.ch} mm each). QR size can be changed in Settings.</p>
+ <input id=lsr placeholder="Search item, code or category" value="${e(lf)}" autocomplete=off oninput="lf=this.value;lrows()">
+ <div class=row><button onclick="lset(0)">All to 0</button><button onclick="lset(1)">All to stock qty</button></div>
+ <div id=lsum class=mut style="margin:8px 0"></div><div id=llist></div>
+ <button class=pri onclick="qrPdf()">Create QR PDF</button></div>`;
+}
+function lrows(){
+ const q=lf.toLowerCase().split(/\s+/).filter(Boolean),av=db.items.filter(i=>i.qty>0);
+ const r=av.filter(i=>q.every(w=>(i.id+' '+i.cat+' '+desc(i)).toLowerCase().includes(w))).slice().reverse();
+ $('#llist').innerHTML=r.map(i=>`<div class=it><b>${e(desc(i))}</b><br><span class=mut>${i.id} | ${e(i.cat)} | Rs ${i.price} | stock ${i.qty}</span>
+ <label>Labels to print<input type=number inputmode=numeric min=0 max=500 value=${lcount(i)} onfocus="this.select()" onchange="lupd('${i.id}',this.value)"></label></div>`).join('')||'<p class=mut>No item in stock matches.</p>';
+ lsum();
+}
+function lupd(id,v){lq[id]=Math.min(500,Math.max(0,parseInt(v)||0));lsum()}
+function lset(m){db.items.forEach(i=>{lq[i.id]=m?i.qty:0});lrows()}
+function lsum(){
+ const av=db.items.filter(i=>i.qty>0),n=av.reduce((a,i)=>a+lcount(i),0),k=av.filter(i=>lcount(i)>0).length,g=grid();
+ const el2=$('#lsum');if(el2)el2.textContent=`${n} labels for ${k} item${k===1?'':'s'} = ${Math.ceil(n/g.per)||0} A4 sheet${Math.ceil(n/g.per)===1?'':'s'}`;
 }
 function fit(d,t,w,max){d.setFont('helvetica','bold');d.setFontSize(max);const tw=d.getTextWidth(t),f=tw>w?max*w/tw:max;d.setFontSize(f);return f}
 async function qrPdf(){
- const its=db.items.filter(i=>i.qty>0);if(!its.length)return alert('No stock available.');
+ const its=[];db.items.filter(i=>i.qty>0).forEach(i=>{for(let c=0;c<lcount(i);c++)its.push(i)});
+ if(!db.items.some(i=>i.qty>0))return alert('No stock available.');
+ if(!its.length)return alert('Set at least one label to print.');
  const {jsPDF}=window.jspdf,d=new jsPDF({unit:'mm',format:'a4'}),g=grid(),ox=(210-g.cols*g.cw)/2,oy=(297-g.rows*g.ch)/2;
  d.setDrawColor(200);d.setLineWidth(.1);d.setTextColor(0);
  its.forEach((it,k)=>{
