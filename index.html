@@ -46,7 +46,7 @@ td.n,th.n{text-align:right}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
 <script>if(typeof jsQR==="undefined"){var js=document.createElement("script");js.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";document.head.appendChild(js)}</script>
 <script>
-const $=s=>document.querySelector(s),K='shopdb1',LIM=[10,10,10,10,15];
+const $=s=>document.querySelector(s),K='shopdb1',LIM=[25,25,25,25,15];
 const e=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
 const L1=['Type of Cloth','Color of Cloth','Type of Design','Pattern','Description'];
@@ -58,7 +58,7 @@ const save=()=>localStorage.setItem(K,JSON.stringify(db));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
 const money=n=>'Rs '+Number(n).toFixed(2);
-const VER='2026-10-19-b';
+const VER='2026-10-21-a';
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
 let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
 const T={bill,stock,qr,rep,set};
