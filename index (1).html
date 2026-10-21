@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Shop Billing</title>
+<style>
+:root{--ink:#1d2433;--mut:#667085;--bg:#f4f6f8;--card:#fff;--ac:#0f766e;--ln:#d9dee5;--bad:#b42318}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.4 system-ui,sans-serif;color:var(--ink);background:var(--bg);padding:env(safe-area-inset-top) 0 calc(70px + env(safe-area-inset-bottom))}
+main{max-width:640px;margin:0 auto;padding:10px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:12px;margin-bottom:10px}
+h2{font-size:16px;margin:0 0 8px}
+input,select{width:100%;padding:10px;margin:0 0 8px;border:1px solid var(--ln);border-radius:8px;font:inherit;background:#fff}
+label{display:block;font-size:12px;color:var(--mut);flex:1}
+.row{display:flex;gap:8px}
+button{font:inherit;padding:10px 14px;border-radius:8px;border:1px solid var(--ln);background:#fff;color:var(--ink)}
+button.pri{background:var(--ac);color:#fff;border-color:var(--ac);width:100%;margin-top:4px}
+button.lnk{border:0;background:none;color:var(--ac);padding:4px 8px}
+.it{border-top:1px solid var(--ln);padding:8px 0}.it:first-of-type{border-top:0}
+.mut{color:var(--mut)}.tot{font-size:18px;font-weight:700}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:#fff;border-top:1px solid var(--ln);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;border-radius:0;padding:14px 2px;background:none;font-size:13px}
+nav button.on{color:var(--ac);font-weight:700;box-shadow:inset 0 3px 0 var(--ac)}
+#warn{background:#fef3c7;color:#92400e;padding:8px 12px;font-size:13px}
+#vid{width:100%;max-height:40vh;object-fit:cover;background:#000;border-radius:10px;margin-bottom:10px}
+#lock{position:fixed;inset:0;background:var(--bg);display:none;place-items:center;z-index:9}
+#lock>div{width:260px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:4px;border-top:1px solid var(--ln);text-align:left}
+td.n,th.n{text-align:right}
+#sug{max-height:45vh;overflow:auto}.sg{padding:9px 4px;border-top:1px solid var(--ln)}.sg:active{background:#e6f4f1}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;background:var(--ink);color:#fff;padding:8px 14px;border-radius:20px;display:none;z-index:8}
+</style></head><body>
+<div id="lock"><div class="card"><h2>Enter PIN</h2><input id="pin" type="password" inputmode="numeric"><button class="pri" onclick="unlock()">Open</button></div></div>
+<div id="warn" hidden>Backup is due. Open Settings and tap Backup.</div>
+<main><video id="vid" playsinline muted hidden></video><div id="main"></div></main>
+<div id="toast"></div>
+<nav>
+<button data-t="bill" onclick="go('bill')">Bill</button>
+<button data-t="stock" onclick="go('stock')">Stock</button>
+<button data-t="qr" onclick="go('qr')">QR labels</button>
+<button data-t="rep" onclick="go('rep')">Reports</button>
+<button data-t="set" onclick="go('set')">Settings</button>
+</nav>
+<!-- Libraries: for offline use, download these three files next to index.html and change the paths -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>if(typeof jsQR==="undefined"){var js=document.createElement("script");js.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";document.head.appendChild(js)}</script>
+<script>
+const $=s=>document.querySelector(s),K='shopdb1',LIM=[25,25,25,25,15];
+const e=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+const L1=['Type of Cloth','Color of Cloth','Type of Design','Pattern','Description'];
+const L2=['Type of Cloth','Color of Cloth','Type of Design','Size','Description'];
+const L3=['Color of Cloth','Length','Width','Height','Description'];
+let db;try{db=JSON.parse(localStorage.getItem(K))}catch(x){}
+db=db||{cats:{'Dress Material':L1,'Sarries':L1,'Kurties':L2,'Trays':L3,'Boxes':L3,'Frames':L3,'Key Holders':L3,'Clocks':L3},items:[],sales:[],shop:{name:'My Shop',upi:''},pin:'',seq:0,lastBackup:0};
+const save=()=>localStorage.setItem(K,JSON.stringify(db));
+if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
+const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
+const money=n=>'Rs '+Number(n).toFixed(2);
+const VER='2026-10-21-a';
+function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
+let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
+const T={bill,stock,qr,rep,set};
+function go(t){tab=t;stopScan();render()}
+function render(){
+ document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+ $('#warn').hidden=!(db.sales.length&&Date.now()-db.lastBackup>864e5);
+ $('#main').innerHTML=T[tab]();
+ if(tab==='stock')lab();if(tab==='qr')lrows();if(tab==='bill'&&!paid)drawCart();
+}
+/* ---------- STOCK ---------- */
+function stock(){
+ const cs=Object.keys(db.cats);
+ const list=db.items.slice().reverse().map(it=>`<div class=it><b>${e(it.id)}</b> ${e(desc(it))}<br><span class=mut>Qty ${it.qty} | Cost ${it.cost} | Price ${it.price}</span>
+ <button class=lnk onclick="chg('${it.id}','qty')">Add qty</button><button class=lnk onclick="chg('${it.id}','price')">Change price</button></div>`).join('')||'<p class=mut>No stock yet. Add your first item above.</p>';
+ return `<div class=card><h2>Add stock item</h2><select id=cat onchange="lastCat=this.value;lab()">${cs.map(c=>`<option ${c===lastCat?'selected':''}>${e(c)}</option>`).join('')}</select>
+ <div id=fl></div><div class=row><label>Cost price<input id=cost type=number inputmode=decimal></label><label>Selling price<input id=price type=number inputmode=decimal></label><label>Qty<input id=qty type=number inputmode=numeric value=1></label></div>
+ <button class=pri onclick="addItem()">Save item</button></div><div class=card><h2>Stock list</h2>${list}</div>`;
+}
+function lab(){
+ const c=$('#cat').value;lastCat=c;
+ $('#fl').innerHTML=db.cats[c].map((l,i)=>`<label>${e(l)} (max ${LIM[i]})<input class=fi maxlength=${LIM[i]}></label>`).join('');
+}
+function addItem(){
+ const c=$('#cat').value,f=[...document.querySelectorAll('.fi')].map(x=>x.value.trim());
+ const cost=parseFloat($('#cost').value),price=parseFloat($('#price').value),qty=parseInt($('#qty').value);
+ if(!f.some(x=>x))return alert('Fill the item description.');
+ if(!(cost>=0)||!(price>=0)||!(qty>0))return alert('Enter cost price, selling price and quantity.');
+ const id=c.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase()+'-'+today().slice(2).replace(/-/g,'')+'-'+String(++db.seq).padStart(3,'0');
+ db.items.push({id,cat:c,f,cost,price,qty,date:today()});save();toast('Saved '+id);render();
+}
+function chg(id,k){
+ const it=db.items.find(x=>x.id===id),v=parseFloat(prompt(k==='qty'?'Quantity to add':'New selling price'));
+ if(!(v>=0))return;if(k==='qty')it.qty+=Math.round(v);else it.price=v;save();render();
+}
+/* ---------- QR LABELS ---------- */
+function drawQR(d,t,x,y,s){
+ const q=qrcode(0,'M');q.addData(t);q.make();const n=q.getModuleCount(),m=s/n;d.setFillColor(0);
+ for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(q.isDark(r,c))d.rect(x+c*m,y+r*m,m+.02,m+.02,'F');
+}
+function grid(){
+ const QS=Math.min(30,Math.max(15,parseFloat(db.shop.qs)||20)),cw=QS+6,ch=QS+11,cols=Math.floor(200/cw),rows=Math.floor(287/ch);
+ return{QS,cw,ch,cols,rows,per:cols*rows};
+}
+let lq={},lf='';
+const lcount=i=>(i.id in lq)?lq[i.id]:i.qty;
+function qr(){
+ const g=grid();
+ return `<div class=card><h2>QR labels</h2><p>Choose how many labels to print for each item. The box starts at the quantity in stock. Set 0 to skip an item. ${g.per} labels per A4 sheet (${g.cw} x ${g.ch} mm each). QR size can be changed in Settings.</p>
+ <input id=lsr placeholder="Search item, code or category" value="${e(lf)}" autocomplete=off oninput="lf=this.value;lrows()">
+ <div class=row><button onclick="lset(0)">All to 0</button><button onclick="lset(1)">All to stock qty</button></div>
+ <div id=lsum class=mut style="margin:8px 0"></div><div id=llist></div>
+ <button class=pri onclick="qrPdf()">Create QR PDF</button></div>`;
+}
+function lrows(){
+ const q=lf.toLowerCase().split(/\s+/).filter(Boolean),av=db.items.filter(i=>i.qty>0);
+ const r=av.filter(i=>q.every(w=>(i.id+' '+i.cat+' '+desc(i)).toLowerCase().includes(w))).slice().reverse();
+ $('#llist').innerHTML=r.map(i=>`<div class=it><b>${e(desc(i))}</b><br><span class=mut>${i.id} | ${e(i.cat)} | Rs ${i.price} | stock ${i.qty}</span>
+ <label>Labels to print<input type=number inputmode=numeric min=0 max=500 value=${lcount(i)} onfocus="this.select()" onchange="lupd('${i.id}',this.value)"></label></div>`).join('')||'<p class=mut>No item in stock matches.</p>';
+ lsum();
+}
+function lupd(id,v){lq[id]=Math.min(500,Math.max(0,parseInt(v)||0));lsum()}
+function lset(m){db.items.forEach(i=>{lq[i.id]=m?i.qty:0});lrows()}
+function lsum(){
+ const av=db.items.filter(i=>i.qty>0),n=av.reduce((a,i)=>a+lcount(i),0),k=av.filter(i=>lcount(i)>0).length,g=grid();
+ const el2=$('#lsum');if(el2)el2.textContent=`${n} labels for ${k} item${k===1?'':'s'} = ${Math.ceil(n/g.per)||0} A4 sheet${Math.ceil(n/g.per)===1?'':'s'}`;
+}
+function fit(d,t,w,max){d.setFont('helvetica','bold');d.setFontSize(max);const tw=d.getTextWidth(t),f=tw>w?max*w/tw:max;d.setFontSize(f);return f}
+async function qrPdf(){
+ const its=[];db.items.filter(i=>i.qty>0).forEach(i=>{for(let c=0;c<lcount(i);c++)its.push(i)});
+ if(!db.items.some(i=>i.qty>0))return alert('No stock available.');
+ if(!its.length)return alert('Set at least one label to print.');
+ const {jsPDF}=window.jspdf,d=new jsPDF({unit:'mm',format:'a4'}),g=grid(),ox=(210-g.cols*g.cw)/2,oy=(297-g.rows*g.ch)/2;
+ d.setDrawColor(200);d.setLineWidth(.1);d.setTextColor(0);
+ its.forEach((it,k)=>{
+  if(k&&k%g.per===0)d.addPage();
+  const p=k%g.per,x=ox+(p%g.cols)*g.cw,y=oy+Math.floor(p/g.cols)*g.ch,qy=y+2.5,mx=x+g.cw/2;
+  d.rect(x,y,g.cw,g.ch);drawQR(d,it.id+'|'+it.price,x+3,qy,g.QS);
+  const f1=fit(d,it.id,g.QS,12),b1=qy+g.QS+1.8+f1*.254;d.text(it.id,mx,b1,{align:'center'});
+  const pt='Rs '+(Number.isInteger(it.price)?it.price:it.price.toFixed(2)),f2=fit(d,pt,g.QS,10),b2=b1+.9+f2*.254;d.text(pt,mx,b2,{align:'center'});
+ });
+ out(d.output('blob'),'QR-labels-'+today()+'.pdf');
+}
+function out(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>window.open(u),300)}
+/* ---------- BILLING ---------- */
+function bill(){
+ if(paid)return payView();
+ return `<div class=card><h2>Customer</h2><input placeholder="Customer name" value="${e(cust.n)}" oninput="cust.n=this.value">
+ <input placeholder="Mobile number" inputmode=tel value="${e(cust.m)}" oninput="cust.m=this.value">
+ <button id=scanBtn class=pri onclick="scan()">Scan item QR</button>
+ <input id=man style="margin-top:8px" placeholder="Or type to search item / code" autocomplete=off oninput="sug()" onfocus="sug()" onkeydown="if(event.key==='Enter')pick()"><div id=sug></div></div><div id=cartbox></div>`;
+}
+function drawCart(){
+ const rows=cart.map((c,i)=>{const it=db.items.find(x=>x.id===c.id);
+  return `<div class=it><b>${e(desc(it))}</b> <span class=mut>${e(it.id)}</span><div class=row>
+  <label>Qty (stock ${it.qty})<input type=number inputmode=numeric min=1 value=${c.qty} onchange="cq(${i},this.value)"></label>
+  <label>Rate<input value=${it.price} disabled></label><label>Discount<input type=number inputmode=decimal min=0 value=${c.disc} onchange="cd(${i},this.value)"></label></div>
+  <div>${money(c.qty*it.price-c.disc)} <button class=lnk onclick="rm(${i})">Remove</button></div></div>`}).join('')||'<p class=mut>Scan a QR to add items to the cart.</p>';
+ $('#cartbox').innerHTML=`<div class=card><h2>Cart</h2>${rows}${cart.length?`<div class=tot>Total ${money(total())}</div><button class=pri onclick="conf()">Confirm bill</button>`:''}</div>`;
+}
+const item=id=>db.items.find(x=>x.id===id);
+const total=()=>cart.reduce((s,c)=>s+c.qty*item(c.id).price-c.disc,0);
+function cq(i,v){cart[i].qty=Math.max(1,parseInt(v)||1);drawCart()}
+function cd(i,v){cart[i].disc=Math.max(0,parseFloat(v)||0);drawCart()}
+function rm(i){cart.splice(i,1);drawCart()}
+function sug(){
+ const q=$('#man').value.toLowerCase().split(/\s+/).filter(Boolean),av=db.items.filter(i=>i.qty>0);
+ const r=(q.length?av.filter(i=>q.every(w=>(i.id+' '+i.cat+' '+desc(i)).toLowerCase().includes(w))):av.slice().reverse()).slice(0,10);
+ $('#sug').innerHTML=r.map(i=>`<div class=sg onclick="addCode('${i.id}');$('#man').value='';sug()"><b>${e(desc(i))}</b><br><span class=mut>${i.id} | ${e(i.cat)} | Rs ${i.price} | stock ${i.qty}</span></div>`).join('')||'<p class=mut>No matching item in stock</p>';
+}
+function pick(){
+ const v=$('#man').value.trim().toUpperCase();
+ if(item(v))addCode(v);else{const f=document.querySelector('#sug .sg');if(!f)return;f.click();return}
+ $('#man').value='';sug();
+}
+function addCode(raw){
+ const pr=String(raw||'').split('|'),code=pr[0].trim().toUpperCase(),qp=pr.length>1?parseFloat(pr[1]):NaN;if(!code)return;const it=item(code);
+ if(!it)return toast('Unknown code: '+code);
+ if(it.qty<1)return toast('Out of stock');
+ const c=cart.find(x=>x.id===code);
+ if(c){if(c.qty<it.qty)c.qty++;else return toast('No more stock')}else cart.push({id:code,qty:1,disc:0});
+ navigator.vibrate&&navigator.vibrate(60);const mm=!isNaN(qp)&&Math.abs(qp-it.price)>0.001;toast('Added: '+desc(it)+(mm?` (label Rs ${qp}, current rate Rs ${it.price} used)`:''),mm?4000:1800);drawCart();
+}
+let stream=null,scanOn=false,last='',lastT=0,det=null;
+try{if('BarcodeDetector' in window)det=new BarcodeDetector({formats:['qr_code']})}catch(x){}
+async function scan(){
+ if(scanOn)return stopScan();
+ if(!det&&typeof jsQR==='undefined')return alert('Scanner library did not load. Check internet and reopen the app.');
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}})}
+ catch(x){return alert('Camera is not available. Open the app from its https address and allow camera access.')}
+ try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]})}catch(x){}
+ const v=$('#vid');v.srcObject=stream;v.hidden=false;await v.play();scanOn=true;$('#scanBtn').textContent='Stop scan';
+ const c=document.createElement('canvas'),g=c.getContext('2d',{willReadFrequently:true});
+ (async function loop(){
+  if(!scanOn)return;
+  if(v.videoWidth){
+   let code='';
+   try{
+    if(det){const r=await det.detect(v);code=r.length?r[0].rawValue:''}
+    else{const w=Math.min(1024,v.videoWidth);c.width=w;c.height=Math.round(w*v.videoHeight/v.videoWidth);g.drawImage(v,0,0,c.width,c.height);
+     const r=jsQR(g.getImageData(0,0,c.width,c.height).data,c.width,c.height,{inversionAttempts:'dontInvert'});code=r?r.data:''}
+   }catch(x){det=null}
+   if(code&&(code!==last||Date.now()-lastT>2500)){last=code;lastT=Date.now();addCode(code)}
+  }
+  setTimeout(loop,120);
+ })();
+}
+function stopScan(){scanOn=false;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$('#vid').hidden=true;const b=$('#scanBtn');if(b)b.textContent='Scan item QR'}
+function conf(){
+ const mob=cust.m.replace(/\D/g,'').slice(-10);
+ if(!cust.n.trim()||mob.length!==10)return alert('Enter customer name and a 10-digit mobile number.');
+ for(const c of cart){const it=item(c.id);if(c.qty>it.qty)return alert(`Only ${it.qty} in stock: ${desc(it)}`);if(c.disc>c.qty*it.price)return alert('Discount is more than the item amount.')}
+ stopScan();
+ const s={no:'B'+String(db.sales.length+1).padStart(4,'0'),date:today(),cust:cust.n.trim(),mob,mode:'',st:'Unpaid',paidOn:'',total:total(),
+  lines:cart.map(c=>{const it=item(c.id);return{id:it.id,cat:it.cat,desc:desc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
+ cart.forEach(c=>item(c.id).qty-=c.qty);db.sales.push(s);save();
+ lastPdf=null;paid=s;cart=[];cust={n:'',m:''};render();
+}
+const upiLink=amt=>`upi://pay?pa=${encodeURIComponent(db.shop.upi)}&pn=${encodeURIComponent(db.shop.name)}&am=${amt.toFixed(2)}&cu=INR`;
+function mkBill(s){
+ const {jsPDF}=window.jspdf,d=new jsPDF({unit:'mm',format:[105,148]});let y=7,lw=0,lh=0;
+ if(db.shop.logo&&db.shop.logoW){const k=Math.min(45/db.shop.logoW,16/db.shop.logoH);lw=db.shop.logoW*k;lh=db.shop.logoH*k;try{d.addImage(db.shop.logo,db.shop.logoT||'PNG',6,y,lw,lh)}catch(x){lw=lh=0}}
+ const tx=lw?6+lw+3:6,tw=99-tx;
+ d.setFont('helvetica','bold');let fs=13;d.setFontSize(fs);while(d.getTextWidth(db.shop.name)>tw&&fs>9){fs-=.5;d.setFontSize(fs)}
+ const nl=d.splitTextToSize(db.shop.name,tw).slice(0,2),nh=fs*.3528*1.15;
+ d.setFont('helvetica','normal');d.setFontSize(7.5);const al=db.shop.addr?d.splitTextToSize(db.shop.addr,tw).slice(0,3):[];
+ const bh=nl.length*nh+(al.length?1+al.length*3.04:0),ty=y+Math.max(0,(lh-bh)/2);
+ d.setFont('helvetica','bold');d.setFontSize(fs);d.text(nl,tx,ty+fs*.27);
+ d.setFont('helvetica','normal');d.setFontSize(7.5);if(al.length)d.text(al,tx,ty+nl.length*nh+1+7.5*.27);
+ d.setFontSize(8);y=y+Math.max(lh,bh)+5;d.text(`Bill ${s.no}    ${s.date}`,6,y);
+ y+=4.5;d.text(`${s.cust}   ${s.mob}`,6,y);y+=3;d.line(6,y,99,y);y+=4;
+ d.setFont('helvetica','bold');d.text('Item',6,y);d.text('Qty',64,y,{align:'right'});d.text('Rate',80,y,{align:'right'});d.text('Amount',99,y,{align:'right'});
+ d.setFont('helvetica','normal');y+=4;
+ s.lines.forEach(l=>{
+  const t=d.splitTextToSize(l.desc,52);if(y+t.length*3.5>124){d.addPage();y=10}
+  d.text(t,6,y);d.text(String(l.qty),64,y,{align:'right'});d.text(l.price.toFixed(2),80,y,{align:'right'});d.text((l.qty*l.price).toFixed(2),99,y,{align:'right'});
+  y+=t.length*3.5;if(l.disc){d.text('Discount',6,y);d.text('-'+l.disc.toFixed(2),99,y,{align:'right'});y+=3.5}y+=1;
+ });
+ d.line(6,y,99,y);y+=5;d.setFont('helvetica','bold');d.setFontSize(10);d.text('Total',6,y);d.text(money(s.total),99,y,{align:'right'});
+ const ok=pst(s)==='Paid';if(ok){y+=5.5;d.setFontSize(9);d.text(`PAYMENT RECEIVED (${s.mode})`,6,y)}
+ if(db.shop.upi&&!ok){y+=4;if(y+30>136){d.addPage();y=8}drawQR(d,upiLink(s.total),6,y,26);d.setFontSize(8);d.text('Scan to pay',36,y+12)}
+ d.setFont('helvetica','normal');d.setFontSize(7);d.text('Thank you! Please visit again.',52.5,140.5,{align:'center'});d.text('Save Paper Save Trees',52.5,144.5,{align:'center'});
+ return d.output('blob');
+}
+const pst=s=>s.st||(s.mode?'Paid':'Unpaid');
+function payView(){
+ const s=paid,ok=pst(s)==='Paid',later=s.mode==='Pay later',done=ok||later;
+ const qrImg=!done&&s.mode==='QR Code'&&db.shop.upi?(()=>{const q=qrcode(0,'M');q.addData(upiLink(s.total));q.make();return `<p>Customer scans to pay ${money(s.total)}</p>${q.createImgTag(6)}`})():'';
+ const bad='<b style="color:var(--bad)">';
+ let body;
+ if(!s.mode)body=`<p>How will the customer pay? The bill PDF is made after this step and shows Payment Received once you confirm it.</p><div class=row><button class=pri onclick="pm('Cash')">Cash</button><button class=pri onclick="pm('QR Code')">QR Code</button></div><button class=pri style="background:#fff;color:var(--ink)" onclick="pm('Pay later')">Pay later (bill without payment remark)</button>`;
+ else if(!done)body=`<p>Mode: <b>${e(s.mode)}</b> - ${bad}payment not confirmed yet</b></p>${qrImg}<button class=pri onclick="recv('${s.no}','${s.mode}')">Confirm payment received</button><button class=lnk onclick="pm('Pay later')">Customer will pay later</button><button class=lnk onclick="paid.mode='';save();render()">Change mode</button>`;
+ else body=`<p>${ok?`<b>Payment received</b> (${e(s.mode)}) on ${e(s.paidOn||s.date)}. The bill shows Payment Received.`:`${bad}Unpaid</b> - the bill has no payment remark.`}</p>
+ ${ok?'':`<div class=row><button class=pri onclick="recv('${s.no}','Cash')">Received cash</button><button class=pri onclick="recv('${s.no}','QR Code')">Received by QR</button></div>`}
+ <button class=pri onclick="sendBill()">Send bill to customer</button><button class=pri onclick="out(lastPdf,'${s.no}.pdf')">Open bill PDF</button><button class=pri onclick="paid=null;render()">New bill</button>`;
+ return `<div class=card><h2>Bill ${s.no} saved</h2><div class=tot>${money(s.total)}</div>${body}</div>`;
+}
+function pm(m){
+ if(m==='QR Code'&&!db.shop.upi)alert('Add your UPI ID in Settings to show a payment QR. The mode is still saved.');
+ paid.mode=m;if(m==='Pay later'){paid.st='Unpaid';lastPdf=mkBill(paid)}save();render();
+}
+function recv(no,mode){
+ const s=db.sales.find(x=>x.no===no);if(!s)return;
+ if(!confirm(`Confirm ${money(s.total)} received from ${s.cust} (${mode})?`))return;
+ s.mode=mode;s.st='Paid';s.paidOn=today();if(paid&&paid.no===s.no)lastPdf=mkBill(s);save();toast('Payment recorded');render();
+}
+function reprint(no){const s=db.sales.find(x=>x.no===no);if(s)out(mkBill(s),s.no+'.pdf')}
+function remind(no){
+ const s=db.sales.find(x=>x.no===no);if(!s)return;
+ const m=`Dear ${s.cust}, your bill ${s.no} dated ${s.date} for ${money(s.total)} at ${db.shop.name} is pending.${db.shop.upi?' You can pay by UPI to '+db.shop.upi+'.':''} Thank you.`;
+ window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(m));
+}
+async function sendBill(){
+ const s=paid,f=new File([lastPdf],s.no+'.pdf',{type:'application/pdf'}),msg=`${db.shop.name}: Bill ${s.no}, total ${money(s.total)}.${pst(s)==='Paid'?'':' Payment pending.'+(db.shop.upi?' UPI: '+db.shop.upi:'')} Thank you!`;
+ if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],text:msg})}catch(x){}return}
+ window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(msg));out(lastPdf,s.no+'.pdf');
+}
+/* ---------- REPORTS ---------- */
+let rf=today().slice(0,8)+'01',rt=today(),rc='';
+const lc=l=>l.cat||(item(l.id)||{}).cat||'Other';
+function rep(){
+ const cs=Object.keys(db.cats),ss=db.sales.filter(s=>s.date>=rf&&s.date<=rt),by={};
+ cs.forEach(c=>by[c]={q:0,r:0,c:0});let nb=0,rcv=0,due=0;
+ ss.forEach(s=>{let hit=0;const ps=pst(s)==='Paid';s.lines.forEach(l=>{const k=lc(l);if(!rc||k===rc){const a=l.qty*l.price-l.disc;if(ps)rcv+=a;else due+=a}by[k]=by[k]||{q:0,r:0,c:0};by[k].q+=l.qty;by[k].r+=l.qty*l.price-l.disc;by[k].c+=l.qty*l.cost;if(!rc||k===rc)hit=1});nb+=hit});
+ let rev=0,cost=0;(rc?[rc]:Object.keys(by)).forEach(k=>{rev+=by[k].r;cost+=by[k].c});
+ const st=db.items.filter(i=>i.qty>0&&(!rc||i.cat===rc));let sv=0,sc=0;st.forEach(i=>{sv+=i.qty*i.price;sc+=i.qty*i.cost});
+ const rows=Object.keys(by).filter(k=>by[k].q).map(k=>`<tr><td>${e(k)}</td><td class=n>${by[k].q}</td><td class=n>${money(by[k].r)}</td><td class=n>${money(by[k].r-by[k].c)}</td></tr>`).join('')||'<tr><td colspan=4 class=mut>No sales in this period</td></tr>';
+ return `<div class=card><h2>Profit and loss</h2><label>Item category<select onchange="rc=this.value;render()"><option value="">All categories</option>${cs.map(c=>`<option ${c===rc?'selected':''}>${e(c)}</option>`).join('')}</select></label>
+ <div class=row><label>From<input type=date value=${rf} onchange="rf=this.value;render()"></label><label>To<input type=date value=${rt} onchange="rt=this.value;render()"></label></div>
+ <table><tr><td>Bills (${e(rc||'all categories')})</td><td class=n>${nb}</td></tr><tr><td>Sales billed (after discount)</td><td class=n>${money(rev)}</td></tr><tr><td>&nbsp;&nbsp;Payment received</td><td class=n>${money(rcv)}</td></tr><tr><td>&nbsp;&nbsp;Payment pending</td><td class=n style="color:var(--bad)">${money(due)}</td></tr><tr><td>Cost of goods sold</td><td class=n>${money(cost)}</td></tr>
+ <tr><td><b>${rev-cost>=0?'Profit':'Loss'}</b></td><td class=n><b>${money(Math.abs(rev-cost))}</b></td></tr></table><p class=mut>Profit is worked out on billed sales, including bills still unpaid.</p></div>
+ <div class=card><h2>Category-wise performance</h2><table><tr><th>Category</th><th class=n>Qty sold</th><th class=n>Sales</th><th class=n>Profit</th></tr>${rows}</table></div>
+ ${billsCard()}<div class=card><h2>Stock in hand (${e(rc||'all categories')})</h2><table><tr><th>Item</th><th class=n>Qty</th><th class=n>Cost</th><th class=n>Price</th></tr>
+ ${st.map(i=>`<tr><td>${e(desc(i))}<br><span class=mut>${i.id}</span></td><td class=n>${i.qty}</td><td class=n>${i.cost}</td><td class=n>${i.price}</td></tr>`).join('')}
+ <tr><td><b>Stock value</b></td><td></td><td class=n><b>${money(sc)}</b></td><td class=n><b>${money(sv)}</b></td></tr></table></div>`;
+}
+let pf='Unpaid';
+function billsCard(){
+ const due=db.sales.filter(s=>pst(s)!=='Paid'),dueAmt=due.reduce((a,s)=>a+s.total,0);
+ let bl=pf==='Unpaid'?due:db.sales.filter(s=>s.date>=rf&&s.date<=rt&&(pf==='All'||pst(s)==='Paid'));
+ bl=bl.filter(s=>!rc||s.lines.some(l=>lc(l)===rc)).slice().reverse();
+ const rows=bl.slice(0,100).map(s=>{const ok=pst(s)==='Paid';
+  return `<div class=it><b>${e(s.no)}</b> ${e(s.date)} | ${e(s.cust)} <span class=mut>${e(s.mob)}</span><br>${money(s.total)} - ${ok?`<b>Paid</b> (${e(s.mode)}${s.paidOn?' on '+e(s.paidOn):''})`:`<b style="color:var(--bad)">Unpaid</b>`}
+  <div>${ok?'':`<button class=lnk onclick="recv('${s.no}','Cash')">Received cash</button><button class=lnk onclick="recv('${s.no}','QR Code')">Received by QR</button><button class=lnk onclick="remind('${s.no}')">Remind</button>`}<button class=lnk onclick="reprint('${s.no}')">Bill PDF</button></div></div>`}).join('')||'<p class=mut>No bills to show.</p>';
+ return `<div class=card><h2>Bills and payments</h2><p>All unpaid bills (any date): <b style="color:var(--bad)">${money(dueAmt)}</b> in ${due.length} bill${due.length===1?'':'s'}</p>
+ <label>Show<select onchange="pf=this.value;render()"><option value="Unpaid" ${pf==='Unpaid'?'selected':''}>Unpaid (all dates)</option><option value="Paid" ${pf==='Paid'?'selected':''}>Paid (selected dates)</option><option value="All" ${pf==='All'?'selected':''}>All bills (selected dates)</option></select></label>${rows}${bl.length>100?'<p class=mut>Showing the latest 100 bills.</p>':''}</div>`;
+}
+/* ---------- SETTINGS ---------- */
+function set(){
+ return `<div class=card><h2>Shop</h2><label>Shop name<input value="${e(db.shop.name)}" onchange="db.shop.name=this.value;save()"></label>
+ <label>Shop address (one line, printed on the bill)<input value="${e(db.shop.addr||'')}" placeholder="Shop no, street, city" onchange="db.shop.addr=this.value.trim();save()"></label>
+ <label>Shop logo (PNG or JPG)<input type=file accept="image/*" onchange="setLogo(this.files[0])"></label>${db.shop.logo?`<div style="margin:0 0 8px"><img src="${db.shop.logo}" style="max-height:60px;max-width:160px;vertical-align:middle"> <button class=lnk onclick="db.shop.logo='';save();render()">Remove logo</button></div>`:''}
+ <label>UPI ID for payment QR<input value="${e(db.shop.upi)}" placeholder="name@bank" onchange="db.shop.upi=this.value.trim();save()"></label>
+ <label>QR size on labels, in mm (15 to 30)<input type=number inputmode=numeric min=15 max=30 value="${db.shop.qs||20}" onchange="db.shop.qs=Math.min(30,Math.max(15,parseFloat(this.value)||20));save();this.value=db.shop.qs"></label>
+ <label>App PIN (leave empty for none)<input type=password inputmode=numeric value="${e(db.pin)}" onchange="db.pin=this.value;save()"></label></div>
+ <div class=card><h2>Backup</h2><p class=mut>Backup files contain customer names and numbers. Keep them in a private folder.</p>
+ <p class=mut>Last backup: ${db.lastBackup?new Date(db.lastBackup).toLocaleString():'never'}</p>
+ <button class=pri onclick="backup('save')">Save backup file to Downloads</button>${isMobile&&navigator.canShare?`<button class=pri onclick="backup('share')">Share backup (Drive, WhatsApp...)</button>`:''}<label style="margin-top:10px">Restore from backup file<input type=file accept=".json" onchange="restore(this.files[0])"></label></div>
+ <div class=card><h2>App version</h2><p>Version <b>${VER}</b></p><button class=pri onclick="reloadApp()">Reload latest version</button><p class=mut>Use this after you upload a new index.html to GitHub. Your stock and sales stay safe.</p></div>
+ <div class=card><h2>Categories</h2><p class=mut>${Object.keys(db.cats).map(e).join(', ')}</p><button class=pri onclick="addCat()">Add new category</button></div>`;
+}
+const isMobile=/Android|iPhone|iPad|Mobile/i.test((navigator&&navigator.userAgent)||'');
+function dl(f){
+ const u=URL.createObjectURL(f),a=document.createElement('a');a.href=u;a.download=f.name;a.style.display='none';
+ document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},5000);
+}
+async function backup(mode){
+ const f=new File([JSON.stringify(db)],'shop-backup-'+today()+'.json',{type:'application/json'});
+ if(mode==='share'&&navigator.canShare&&navigator.canShare({files:[f]})){
+  try{await navigator.share({files:[f]});db.lastBackup=Date.now();save();toast('Backup shared',2500);render();return}
+  catch(x){if(x&&x.name==='AbortError'){render();return}}
+ }
+ try{dl(f);db.lastBackup=Date.now();save();toast('Backup saved as '+f.name+'. Look in your Downloads folder.',4500)}
+ catch(x){alert('Backup could not be saved: '+(x&&x.message||x))}
+ render();
+}
+function restore(f){
+ if(!f)return;const r=new FileReader();
+ r.onload=()=>{try{const n=JSON.parse(r.result);if(!n.items||!n.cats)throw 0;if(!confirm('Replace all current data with this backup?'))return;db=n;save();toast('Restored');render()}catch(x){alert('This is not a valid backup file.')}};
+ r.readAsText(f);
+}
+function addCat(){
+ const n=(prompt('New category name')||'').trim();if(!n||db.cats[n])return;
+ const l=(prompt('Five column names, separated by commas')||'').split(',').map(x=>x.trim()).filter(Boolean);
+ if(l.length!==5)return alert('Enter exactly five column names.');db.cats[n]=l;save();render();
+}
+function setLogo(f){
+ if(!f)return;const r=new FileReader();
+ r.onload=()=>{const im=new Image();
+  im.onload=()=>{
+   const k=Math.min(1,360/Math.max(im.width,im.height)),w=Math.max(1,Math.round(im.width*k)),h=Math.max(1,Math.round(im.height*k));
+   const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,w,h);g.drawImage(im,0,0,w,h);
+   let u=c.toDataURL('image/png'),t='PNG';if(u.length>250000){u=c.toDataURL('image/jpeg',.85);t='JPEG'}
+   db.shop.logo=u;db.shop.logoT=t;db.shop.logoW=w;db.shop.logoH=h;save();toast('Logo saved');render();
+  };
+  im.onerror=()=>alert('Could not read this image. Please use a PNG or JPG file.');im.src=r.result;
+ };
+ r.readAsDataURL(f);
+}
+async function reloadApp(){
+ try{await fetch(location.pathname,{cache:'reload'})}catch(x){}
+ try{if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)))}}catch(x){}
+ location.reload();
+}
+function unlock(){if($('#pin').value===db.pin){$('#lock').style.display='none';render()}else{$('#pin').value='';toast('Wrong PIN')}}
+{const lu=db.sales[db.sales.length-1];if(lu&&lu.st&&lu.date===today()&&pst(lu)!=='Paid'&&lu.mode!=='Pay later')paid=lu}
+if(db.pin){$('#lock').style.display='grid'}else render();
+</script></body></html>
