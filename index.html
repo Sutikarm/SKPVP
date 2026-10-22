@@ -57,8 +57,9 @@ db=db||{cats:{'Dress Material':L1,'Sarries':L1,'Kurties':L2,'Trays':L3,'Boxes':L
 const save=()=>localStorage.setItem(K,JSON.stringify(db));
 if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
 const desc=it=>it.f.join(' ').replace(/\s+/g,' ').trim();
+const billDesc=it=>[it.cat,it.f[0],it.f[1],it.f[4]].map(x=>String(x||'').trim()).filter(Boolean).join(', ');
 const money=n=>'Rs '+Number(n).toFixed(2);
-const VER='2026-10-21-a';
+const VER='2026-10-22-d';
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);t.h=setTimeout(()=>t.style.display='none',ms||1800)}
 let tab='bill',cart=[],cust={n:'',m:''},paid=null,lastPdf=null,lastCat='';
 const T={bill,stock,qr,rep,set};
@@ -67,16 +68,41 @@ function render(){
  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
  $('#warn').hidden=!(db.sales.length&&Date.now()-db.lastBackup>864e5);
  $('#main').innerHTML=T[tab]();
- if(tab==='stock')lab();if(tab==='qr')lrows();if(tab==='bill'&&!paid)drawCart();
+ if(tab==='stock'){lab();srows()}if(tab==='qr')lrows();if(tab==='bill'&&!paid)drawCart();
 }
 /* ---------- STOCK ---------- */
+let sf='',ed=null;
 function stock(){
  const cs=Object.keys(db.cats);
- const list=db.items.slice().reverse().map(it=>`<div class=it><b>${e(it.id)}</b> ${e(desc(it))}<br><span class=mut>Qty ${it.qty} | Cost ${it.cost} | Price ${it.price}</span>
- <button class=lnk onclick="chg('${it.id}','qty')">Add qty</button><button class=lnk onclick="chg('${it.id}','price')">Change price</button></div>`).join('')||'<p class=mut>No stock yet. Add your first item above.</p>';
- return `<div class=card><h2>Add stock item</h2><select id=cat onchange="lastCat=this.value;lab()">${cs.map(c=>`<option ${c===lastCat?'selected':''}>${e(c)}</option>`).join('')}</select>
+ return `${ed?editCard():''}<div class=card><h2>Add stock item</h2><select id=cat onchange="lastCat=this.value;lab()">${cs.map(c=>`<option ${c===lastCat?'selected':''}>${e(c)}</option>`).join('')}</select>
  <div id=fl></div><div class=row><label>Cost price<input id=cost type=number inputmode=decimal></label><label>Selling price<input id=price type=number inputmode=decimal></label><label>Qty<input id=qty type=number inputmode=numeric value=1></label></div>
- <button class=pri onclick="addItem()">Save item</button></div><div class=card><h2>Stock list</h2>${list}</div>`;
+ <button class=pri onclick="addItem()">Save item</button></div><div class=card><h2>Stock list</h2>
+ <input id=ssr placeholder="Search item, code or category" value="${e(sf)}" autocomplete=off oninput="sf=this.value;srows()"><div id=slist></div></div>`;
+}
+function srows(){
+ const q=sf.toLowerCase().split(/\s+/).filter(Boolean);
+ const r=db.items.filter(i=>q.every(w=>(i.id+' '+i.cat+' '+desc(i)).toLowerCase().includes(w))).slice().reverse();
+ $('#slist').innerHTML=r.map(it=>`<div class=it><b>${e(it.id)}</b> ${e(desc(it))}<br><span class=mut>Qty ${it.qty} | Cost ${it.cost} | Price ${it.price}</span>
+ <div><button class=lnk onclick="chg('${it.id}','qty')">Add qty</button><button class=lnk onclick="chg('${it.id}','price')">Change price</button><button class=lnk onclick="edit('${it.id}')">Edit details</button></div></div>`).join('')||(db.items.length?'<p class=mut>No item matches your search.</p>':'<p class=mut>No stock yet. Add your first item above.</p>');
+}
+function edit(id){ed=id;render();if(window.scrollTo)window.scrollTo(0,0)}
+function editCard(){
+ const it=db.items.find(x=>x.id===ed);if(!it){ed=null;return ''}
+ const L=db.cats[it.cat]||[];
+ return `<div class=card style="border-color:var(--ac)"><h2>Edit item ${e(it.id)}</h2><p class=mut>Category: ${e(it.cat)} (cannot be changed)</p>
+ ${[0,1,2,3,4].map(i=>`<label>${e(L[i]||'Detail '+(i+1))} (max ${LIM[i]})<input class=ef maxlength=${LIM[i]} value="${e(it.f[i]||'')}"></label>`).join('')}
+ <div class=row><label>Cost price<input id=ecost type=number inputmode=decimal value="${it.cost}"></label><label>Selling price<input id=eprice type=number inputmode=decimal value="${it.price}"></label><label>Qty in stock<input id=eqty type=number inputmode=numeric value="${it.qty}"></label></div>
+ <button class=pri onclick="saveEdit()">Save changes</button><button class=lnk onclick="ed=null;render()">Cancel</button></div>`;
+}
+function saveEdit(){
+ const it=db.items.find(x=>x.id===ed);if(!it)return;
+ const f=[...document.querySelectorAll('.ef')].map(x=>x.value.trim());
+ const cost=parseFloat($('#ecost').value),price=parseFloat($('#eprice').value),qty=parseInt($('#eqty').value);
+ if(!f.some(x=>x))return alert('Fill the item description.');
+ if(!(cost>=0)||!(price>=0)||!(qty>=0))return alert('Enter cost price, selling price and quantity (0 or more).');
+ const pc=price!==it.price;
+ it.f=f;it.cost=cost;it.price=price;it.qty=qty;ed=null;save();
+ toast(pc?'Saved. Price changed, so printed labels still show the old rate.':'Item updated',pc?4500:1800);render();
 }
 function lab(){
  const c=$('#cat').value;lastCat=c;
@@ -213,7 +239,7 @@ function conf(){
  for(const c of cart){const it=item(c.id);if(c.qty>it.qty)return alert(`Only ${it.qty} in stock: ${desc(it)}`);if(c.disc>c.qty*it.price)return alert('Discount is more than the item amount.')}
  stopScan();
  const s={no:'B'+String(db.sales.length+1).padStart(4,'0'),date:today(),cust:cust.n.trim(),mob,mode:'',st:'Unpaid',paidOn:'',total:total(),
-  lines:cart.map(c=>{const it=item(c.id);return{id:it.id,cat:it.cat,desc:desc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
+  lines:cart.map(c=>{const it=item(c.id);return{id:it.id,cat:it.cat,desc:desc(it),bd:billDesc(it),qty:c.qty,price:it.price,cost:it.cost,disc:c.disc}})};
  cart.forEach(c=>item(c.id).qty-=c.qty);db.sales.push(s);save();
  lastPdf=null;paid=s;cart=[];cust={n:'',m:''};render();
 }
@@ -233,7 +259,7 @@ function mkBill(s){
  d.setFont('helvetica','bold');d.text('Item',6,y);d.text('Qty',64,y,{align:'right'});d.text('Rate',80,y,{align:'right'});d.text('Amount',99,y,{align:'right'});
  d.setFont('helvetica','normal');y+=4;
  s.lines.forEach(l=>{
-  const t=d.splitTextToSize(l.desc,52);if(y+t.length*3.5>124){d.addPage();y=10}
+  const t=d.splitTextToSize(l.bd||(item(l.id)?billDesc(item(l.id)):l.desc),52);if(y+t.length*3.5>124){d.addPage();y=10}
   d.text(t,6,y);d.text(String(l.qty),64,y,{align:'right'});d.text(l.price.toFixed(2),80,y,{align:'right'});d.text((l.qty*l.price).toFixed(2),99,y,{align:'right'});
   y+=t.length*3.5;if(l.disc){d.text('Discount',6,y);d.text('-'+l.disc.toFixed(2),99,y,{align:'right'});y+=3.5}y+=1;
  });
@@ -253,7 +279,7 @@ function payView(){
  else if(!done)body=`<p>Mode: <b>${e(s.mode)}</b> - ${bad}payment not confirmed yet</b></p>${qrImg}<button class=pri onclick="recv('${s.no}','${s.mode}')">Confirm payment received</button><button class=lnk onclick="pm('Pay later')">Customer will pay later</button><button class=lnk onclick="paid.mode='';save();render()">Change mode</button>`;
  else body=`<p>${ok?`<b>Payment received</b> (${e(s.mode)}) on ${e(s.paidOn||s.date)}. The bill shows Payment Received.`:`${bad}Unpaid</b> - the bill has no payment remark.`}</p>
  ${ok?'':`<div class=row><button class=pri onclick="recv('${s.no}','Cash')">Received cash</button><button class=pri onclick="recv('${s.no}','QR Code')">Received by QR</button></div>`}
- <button class=pri onclick="sendBill()">Send bill to customer</button><button class=pri onclick="out(lastPdf,'${s.no}.pdf')">Open bill PDF</button><button class=pri onclick="paid=null;render()">New bill</button>`;
+ <p>Customer mobile: <b>${e(s.mob)}</b> <button class=lnk onclick="copyNum('${s.no}')">Copy number</button></p><button class=pri onclick="sendBill()">Send bill to customer</button><button class=pri onclick="out(lastPdf,'${s.no}.pdf')">Open bill PDF</button><button class=pri onclick="paid=null;render()">New bill</button>`;
  return `<div class=card><h2>Bill ${s.no} saved</h2><div class=tot>${money(s.total)}</div>${body}</div>`;
 }
 function pm(m){
@@ -271,7 +297,16 @@ function remind(no){
  const m=`Dear ${s.cust}, your bill ${s.no} dated ${s.date} for ${money(s.total)} at ${db.shop.name} is pending.${db.shop.upi?' You can pay by UPI to '+db.shop.upi+'.':''} Thank you.`;
  window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(m));
 }
+async function copyText(t){
+ try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(t);return true}}catch(x){}
+ try{const ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();const ok=document.execCommand('copy');ta.remove();return !!ok}catch(x){return false}
+}
+function copyNum(no){
+ const s=db.sales.find(x=>x.no===no);if(!s)return;const num=s.mob;
+ copyText(num).then(ok=>toast(ok?'Copied '+num+'. Paste it in WhatsApp search.':'Could not copy. Customer number: '+num,5000));
+}
 async function sendBill(){
+ copyNum(paid.no);
  const s=paid,f=new File([lastPdf],s.no+'.pdf',{type:'application/pdf'}),msg=`${db.shop.name}: Bill ${s.no}, total ${money(s.total)}.${pst(s)==='Paid'?'':' Payment pending.'+(db.shop.upi?' UPI: '+db.shop.upi:'')} Thank you!`;
  if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],text:msg})}catch(x){}return}
  window.open('https://wa.me/91'+s.mob+'?text='+encodeURIComponent(msg));out(lastPdf,s.no+'.pdf');
